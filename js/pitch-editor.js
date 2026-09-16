@@ -136,6 +136,10 @@
   const zoomOutVBtn = el('zoomOutV');
   const scaleKeySelect = el('scaleKeySelect');
   const scaleTypeSelect = el('scaleTypeSelect');
+  const zoomToolBtn = el('zoomToolBtn');
+  const scaleToolBtn = el('scaleToolBtn');
+  const zoomPanel = el('zoomPanel');
+  const scalePanel = el('scalePanel');
 
   if (!fileInput) return; // page section not present
 
@@ -635,6 +639,27 @@
     fullscreenBtn.textContent = state.isFullscreen ? '×' : '⛶';
     fullscreenBtn.setAttribute('aria-label', state.isFullscreen ? '全画面を閉じる' : '全画面表示');
   });
+
+  // Bottom icon toolbar: tapping a tool button reveals its panel just above
+  // the toolbar; tapping the same button again (or the other one) closes it,
+  // so at most one panel is open at a time.
+  function setupToolToggle(button, panel) {
+    button.addEventListener('click', () => {
+      const isOpen = !panel.classList.contains('hidden');
+      [[zoomToolBtn, zoomPanel], [scaleToolBtn, scalePanel]].forEach(([b, p]) => {
+        p.classList.add('hidden');
+        b.classList.remove('active');
+        b.setAttribute('aria-expanded', 'false');
+      });
+      if (!isOpen) {
+        panel.classList.remove('hidden');
+        button.classList.add('active');
+        button.setAttribute('aria-expanded', 'true');
+      }
+    });
+  }
+  setupToolToggle(zoomToolBtn, zoomPanel);
+  setupToolToggle(scaleToolBtn, scalePanel);
 
   zoomInHBtn.addEventListener('click', () => {
     state.hZoom = clamp(state.hZoom * ZOOM_STEP, H_ZOOM_MIN, H_ZOOM_MAX);
