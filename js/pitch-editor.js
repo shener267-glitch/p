@@ -140,6 +140,7 @@
   const scaleToolBtn = el('scaleToolBtn');
   const zoomPanel = el('zoomPanel');
   const scalePanel = el('scalePanel');
+  const playToggleBtn = el('playToggleBtn');
 
   if (!fileInput) return; // page section not present
 
@@ -149,8 +150,8 @@
   }
 
   const hasOfflineAudio = !!(window.OfflineAudioContext || window.webkitOfflineAudioContext);
-  const hasAudioWorklet = !!window.AudioWorkletNode;
-  if (!hasOfflineAudio || !hasAudioWorklet) {
+  const hasAudioContext = !!(window.AudioContext || window.webkitAudioContext);
+  if (!hasOfflineAudio || !hasAudioContext) {
     const unsupportedText = el('unsupportedText');
     if (unsupportedText) unsupportedText.classList.remove('hidden');
     fileInput.disabled = true;
@@ -198,6 +199,16 @@
     scaleKey: 0,
     scaleType: 'none',
     drag: null, // { segment, startPointerY, startTargetMidi }
+    playback: {
+      audioCtx: null,
+      sourceNode: null,
+      isPlaying: false,
+      cursorTime: 0,
+      startedAtCtxTime: 0,
+      startedAtCursor: 0,
+      rafHandle: null,
+      renderToken: 0, // invalidates an in-flight preview render if a newer one starts
+    },
   };
 
   // ---- WAV encoding --------------------------------------------------
@@ -282,24 +293,30 @@
     }
   }
 
-  // Decodes with decodeAudioData, trying an OfflineAudioContext first (no
-  // audible side effects) and falling back to a real AudioContext, since
-  // some browsers (notably older Safari) are inconsistent about decoding
-  // via an offline context.
+  // Decodes with decodeAudioData. decodeAudioData always resamples to the
+  // calling context's own sample rate, so a real AudioContext is tried
+  // first: its rate follows the device's actual audio hardware (commonly
+  // 48kHz on modern phones), which is normally at least as high as the
+  // source's own rate. The previous implementation always decoded through
+  // an OfflineAudioContext hardcoded to 44100Hz, silently downsampling any
+  // 48kHz source (very common for phone recordings) and losing quality
+  // before any editing even happened. The Offline fallback (used only if a
+  // real AudioContext is unavailable or fails) now targets 48000 instead.
   async function decodeViaWebAudio(arrayBuffer) {
-    const OfflineCtor = window.OfflineAudioContext || window.webkitOfflineAudioContext;
-    try {
-      const offlineCtx = new OfflineCtor(1, 1, 44100);
-      return await offlineCtx.decodeAudioData(arrayBuffer.slice(0));
-    } catch (offlineErr) {
-      const AudioCtxCtor = window.AudioContext || window.webkitAudioContext;
+    const AudioCtxCtor = window.AudioContext || window.webkitAudioContext;
+    if (AudioCtxCtor) {
       const ctx = new AudioCtxCtor();
       try {
         return await ctx.decodeAudioData(arrayBuffer.slice(0));
+      } catch (err) {
+        // fall through to the offline attempt below
       } finally {
         ctx.close();
       }
     }
+    const OfflineCtor = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+    const offlineCtx = new OfflineCtor(1, 1, 48000);
+    return await offlineCtx.decodeAudioData(arrayBuffer.slice(0));
   }
 
   async function decodeAudioFromFile(file, onStatus) {
@@ -563,6 +580,16 @@
       ctx.fill();
       ctx.stroke();
     }
+
+    if (state.playback.isPlaying || state.playback.cursorTime > 0) {
+      const px = timeToX(state.playback.cursorTime);
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(px, 0);
+      ctx.lineTo(px, h);
+      ctx.stroke();
+    }
   }
 
   function redraw() {
@@ -595,6 +622,7 @@
     const seg = hitTestSegment(x, y);
     if (!seg) return;
     e.preventDefault();
+    stopPlayback();
     notesCanvas.setPointerCapture(e.pointerId);
     state.drag = { segment: seg, startClientY: e.clientY, startTargetMidi: seg.targetMidi, scaleY };
     redraw();
@@ -630,6 +658,119 @@
     redraw();
     drawWaveformIfReady();
   }
+
+  // ---- In-editor playback preview ----------------------------------------
+  // Renders the current edit state (reusing the same quality-preserving
+  // renderCorrectedAudio used for export) and plays it back directly via
+  // Web Audio, so edits can be previewed without leaving the editor or
+  // waiting on the WAV-encode + download-link flow.
+  function updatePlayButtonUI() {
+    const icon = playToggleBtn.querySelector('.bt-icon');
+    const label = playToggleBtn.querySelector('.bt-label');
+    icon.textContent = state.playback.isPlaying ? '⏸' : '▶';
+    label.textContent = state.playback.isPlaying ? '停止' : '再生';
+  }
+
+  function stopPlayback() {
+    const pb = state.playback;
+    if (pb.sourceNode) {
+      pb.sourceNode.onended = null;
+      try { pb.sourceNode.stop(); } catch (err) {}
+      pb.sourceNode = null;
+    }
+    if (pb.rafHandle) {
+      cancelAnimationFrame(pb.rafHandle);
+      pb.rafHandle = null;
+    }
+    pb.isPlaying = false;
+    updatePlayButtonUI();
+  }
+
+  function tickPlayhead() {
+    const pb = state.playback;
+    if (!pb.isPlaying) return;
+    const elapsed = pb.audioCtx.currentTime - pb.startedAtCtxTime;
+    pb.cursorTime = pb.startedAtCursor + elapsed;
+    if (pb.cursorTime >= state.duration) {
+      pb.cursorTime = state.duration;
+      stopPlayback();
+      drawNotes();
+      return;
+    }
+    drawNotes();
+    pb.rafHandle = requestAnimationFrame(tickPlayhead);
+  }
+
+  async function startPlayback(fromTime) {
+    if (!state.samples) return;
+    stopPlayback();
+    const pb = state.playback;
+    const myToken = ++pb.renderToken;
+
+    playToggleBtn.disabled = true;
+    playToggleBtn.querySelector('.bt-label').textContent = '準備中';
+
+    let previewSamples;
+    try {
+      previewSamples = await renderCorrectedAudio(state.samples, state.sampleRate, state.segments);
+    } catch (err) {
+      playToggleBtn.disabled = false;
+      updatePlayButtonUI();
+      return;
+    }
+    playToggleBtn.disabled = false;
+
+    if (myToken !== pb.renderToken) return; // superseded by a newer play/seek request
+
+    const AudioCtxCtor = window.AudioContext || window.webkitAudioContext;
+    if (!pb.audioCtx) pb.audioCtx = new AudioCtxCtor();
+    const ctx = pb.audioCtx;
+    if (ctx.state === 'suspended') await ctx.resume();
+
+    const buffer = ctx.createBuffer(1, previewSamples.length, state.sampleRate);
+    buffer.copyToChannel(previewSamples, 0);
+
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+    source.connect(ctx.destination);
+
+    const offset = Math.max(0, Math.min(fromTime, Math.max(0, state.duration - 0.01)));
+    source.onended = () => {
+      if (pb.sourceNode === source) {
+        pb.isPlaying = false;
+        updatePlayButtonUI();
+        if (pb.rafHandle) cancelAnimationFrame(pb.rafHandle);
+      }
+    };
+    source.start(0, offset);
+
+    pb.sourceNode = source;
+    pb.isPlaying = true;
+    pb.startedAtCtxTime = ctx.currentTime;
+    pb.startedAtCursor = offset;
+    pb.cursorTime = offset;
+    updatePlayButtonUI();
+    tickPlayhead();
+  }
+
+  playToggleBtn.addEventListener('click', () => {
+    if (state.playback.isPlaying) {
+      stopPlayback();
+    } else {
+      startPlayback(state.playback.cursorTime || 0);
+    }
+  });
+
+  // Tapping the time ruler seeks to that position and starts playing from
+  // there — the "play from a selected position" request.
+  rulerCanvas.addEventListener('pointerdown', (e) => {
+    if (!state.samples) return;
+    const rect = rulerCanvas.getBoundingClientRect();
+    const scaleX = rulerCanvas.width / rect.width;
+    const x = (e.clientX - rect.left) * scaleX;
+    const t = x / state.pixelsPerSecond;
+    startPlayback(t);
+  });
 
   // ---- Fullscreen / zoom / scale-highlight controls ----------------------
   const fullscreenIcon = fullscreenBtn.querySelector('.bt-icon');
@@ -707,19 +848,20 @@
 
   // ---- Reset / render ---------------------------------------------------
   resetBtn.addEventListener('click', () => {
+    stopPlayback();
     for (const seg of state.segments) seg.targetMidi = seg.originalMidi;
     relayout();
   });
 
   renderBtn.addEventListener('click', async () => {
     renderBtn.disabled = true;
-    renderStatusEl.textContent = '書き出し中…';
     correctedAudio.classList.add('hidden');
     downloadLink.classList.add('hidden');
     try {
-      const rendered = await renderCorrectedAudio(state.samples, state.sampleRate, state.segments);
-      const mono = rendered.getChannelData(0);
-      const blob = encodeMonoWav(mono, rendered.sampleRate);
+      const rendered = await renderCorrectedAudio(state.samples, state.sampleRate, state.segments, (p) => {
+        renderStatusEl.textContent = `書き出し中… ${Math.round(p * 100)}%`;
+      });
+      const blob = encodeMonoWav(rendered, state.sampleRate);
       const url = URL.createObjectURL(blob);
       correctedAudio.src = url;
       correctedAudio.classList.remove('hidden');
@@ -734,54 +876,117 @@
     }
   });
 
-  async function renderCorrectedAudio(samples, sampleRate, segments) {
-    const blockSize = 128;
-    const tailPad = 4096;
+  // Renders the edited audio. Untouched stretches are copied through
+  // byte-for-byte from the original samples; only the time ranges actually
+  // covering an edited note (plus a short margin) are run through the
+  // phase-vocoder pitch shifter. This avoids the previous behavior of
+  // running the *entire* file through the shifter even when nothing was
+  // edited — the phase vocoder's windowed reconstruction is not perfectly
+  // transparent even at a 1.0 (no-op) ratio, so that was a real,
+  // unnecessary quality loss on audio the user never touched.
+  async function renderCorrectedAudio(samples, sampleRate, segments, onProgress) {
     const totalSamples = samples.length;
-    const renderLength = totalSamples + tailPad;
+    const output = samples.slice();
 
-    const ratios = window.PitchEditorCore.buildRatioTimeline(segments, {
-      sampleRate,
-      blockSize,
-      totalSamples,
-      rampSeconds: 0.012,
-    });
-    const numBlocksNeeded = Math.ceil(renderLength / blockSize);
-    let fullRatios = ratios;
-    if (ratios.length < numBlocksNeeded) {
-      fullRatios = new Float32Array(numBlocksNeeded).fill(1.0);
-      fullRatios.set(ratios);
+    const active = segments.filter((s) => s.targetMidi !== s.originalMidi);
+    if (active.length === 0) {
+      if (onProgress) onProgress(1);
+      return output;
     }
 
-    const DecodeCtor = window.OfflineAudioContext || window.webkitOfflineAudioContext;
-    const renderCtx = new DecodeCtor(1, renderLength, sampleRate);
-    await renderCtx.audioWorklet.addModule('js/pitch-worklet.js');
+    const blockSize = 128;
+    const marginSeconds = 0.05;
+    const marginSamples = Math.round(marginSeconds * sampleRate);
+    const tailPad = 4096;
 
-    const buffer = renderCtx.createBuffer(1, totalSamples, sampleRate);
-    buffer.copyToChannel(samples, 0);
-    const source = renderCtx.createBufferSource();
-    source.buffer = buffer;
+    const rawRanges = active
+      .map((s) => ({
+        start: Math.max(0, Math.floor(s.startTime * sampleRate) - marginSamples),
+        end: Math.min(totalSamples, Math.ceil(s.endTime * sampleRate) + marginSamples),
+      }))
+      .sort((a, b) => a.start - b.start);
 
-    const workletNode = new AudioWorkletNode(renderCtx, 'ratio-pitch-shift-processor', {
-      numberOfInputs: 1,
-      numberOfOutputs: 1,
-      channelCount: 1,
-      channelCountMode: 'explicit',
-      channelInterpretation: 'speakers',
-      outputChannelCount: [1],
-      processorOptions: { ratios: fullRatios },
-    });
+    const runs = [];
+    for (const r of rawRanges) {
+      const last = runs[runs.length - 1];
+      if (last && r.start <= last.end) {
+        last.end = Math.max(last.end, r.end);
+      } else {
+        runs.push({ start: r.start, end: r.end });
+      }
+    }
 
-    source.connect(workletNode).connect(renderCtx.destination);
-    source.start(0);
+    for (let runIdx = 0; runIdx < runs.length; runIdx++) {
+      const run = runs[runIdx];
+      const runLength = run.end - run.start;
 
-    return renderCtx.startRendering();
+      const localSegments = active
+        .filter((s) => s.startTime * sampleRate < run.end && s.endTime * sampleRate > run.start)
+        .map((s) => ({
+          startTime: Math.max(0, s.startTime - run.start / sampleRate),
+          endTime: Math.min(runLength / sampleRate, s.endTime - run.start / sampleRate),
+          originalMidi: s.originalMidi,
+          targetMidi: s.targetMidi,
+        }));
+
+      const shifter = new window.PitchCorrectionDSP.PhaseVocoderPitchShifter(1024, 8, sampleRate);
+      const renderLength = runLength + tailPad;
+      const ratios = window.PitchEditorCore.buildRatioTimeline(localSegments, {
+        sampleRate,
+        blockSize,
+        totalSamples: renderLength,
+        rampSeconds: 0.012,
+      });
+
+      const runOutput = new Float32Array(renderLength);
+      const inBlock = new Float32Array(blockSize);
+      const outBlock = new Float32Array(blockSize);
+      let sinceYield = 0;
+
+      for (let i = 0; i < renderLength; i += blockSize) {
+        const srcStart = run.start + i;
+        const n = Math.min(blockSize, totalSamples - srcStart, renderLength - i);
+        inBlock.fill(0);
+        if (n > 0) inBlock.set(samples.subarray(srcStart, srcStart + n));
+
+        const ratio = ratios[Math.floor(i / blockSize)] || 1.0;
+        shifter.process(inBlock, outBlock, blockSize, ratio);
+        const outN = Math.min(blockSize, renderLength - i);
+        runOutput.set(outBlock.subarray(0, outN), i);
+
+        sinceYield++;
+        if (sinceYield >= 200) {
+          sinceYield = 0;
+          if (onProgress) onProgress((runIdx + i / renderLength) / runs.length);
+          await new Promise((resolve) => requestAnimationFrame(resolve));
+        }
+      }
+
+      // The shifter has an inherent algorithmic latency (it needs to buffer
+      // ahead before it can emit the first valid output sample), so the
+      // output for input sample i actually comes out at index i + latency.
+      const latency = shifter.inFifoLatency;
+      const fadeLen = Math.min(marginSamples, Math.floor(runLength / 2));
+      for (let i = 0; i < runLength; i++) {
+        let mix = 1.0;
+        if (i < fadeLen) mix = i / fadeLen;
+        else if (i >= runLength - fadeLen) mix = (runLength - 1 - i) / fadeLen;
+        const shiftedSample = runOutput[i + latency] || 0;
+        const outIdx = run.start + i;
+        output[outIdx] = output[outIdx] * (1 - mix) + shiftedSample * mix;
+      }
+    }
+
+    if (onProgress) onProgress(1);
+    return output;
   }
 
   // ---- File input wiring -------------------------------------------------
   fileInput.addEventListener('change', async () => {
     const file = fileInput.files && fileInput.files[0];
     if (!file) return;
+    stopPlayback();
+    state.playback.cursorTime = 0;
     fileNameEl.textContent = file.name;
     editorSection.classList.add('hidden');
     correctedAudio.classList.add('hidden');
@@ -836,6 +1041,8 @@
         getPixelsPerSemitone: () => state.pixelsPerSemitone,
         getZoom: () => ({ h: state.hZoom, v: state.vZoom }),
         isFullscreen: () => state.isFullscreen,
+        isPlaying: () => state.playback.isPlaying,
+        getCursorTime: () => state.playback.cursorTime,
         midiToY,
         timeToX,
       };

@@ -1,11 +1,9 @@
-// Pitch correction DSP core + AudioWorkletProcessor.
-//
-// This file is loaded two ways:
-//   1) In the browser, via audioContext.audioWorklet.addModule() as a classic
-//      (non-module) worklet script, so it must not use import/export syntax.
-//   2) In Node, via require(), for unit-testing the pure DSP pieces
-//      (smbFft / PhaseVocoderPitchShifter / YinDetector / nearestScaleFrequency)
-//      without needing a browser or the AudioWorkletProcessor global.
+// Pitch correction DSP core: FFT, phase-vocoder pitch shifting, YIN pitch
+// detection. Rendering runs synchronously on the main thread (chunked, see
+// js/pitch-editor.js) rather than in an AudioWorklet, so this file is a
+// plain script with no import/export syntax — loaded two ways:
+//   1) In the browser, as a normal <script>, exposing window.PitchCorrectionDSP.
+//   2) In Node, via require(), for unit-testing the pure DSP pieces.
 (function (global) {
   'use strict';
 
@@ -261,61 +259,7 @@
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = DSP;
   }
-  // Expose on global scope too (useful for quick manual testing in a browser tab).
+  // Expose on global scope too: this is how js/pitch-editor.js reaches these
+  // classes in the browser (loaded as a plain <script>, not a worklet module).
   if (global) global.PitchCorrectionDSP = DSP;
-
-  // ---------------------------------------------------------------------
-  // AudioWorkletProcessor wrapper. Only defined inside an AudioWorklet
-  // global scope (absent in Node / normal window scope).
-  //
-  // This processor applies a precomputed per-block pitch-shift ratio
-  // timeline to the input (used to render a file with the user's manual,
-  // per-note pitch edits applied). It does not do any of its own pitch
-  // detection — analysis and note-editing happen ahead of time on the
-  // main thread, over the whole decoded buffer.
-  // ---------------------------------------------------------------------
-  if (typeof AudioWorkletProcessor !== 'undefined') {
-    class RatioPitchShiftProcessor extends AudioWorkletProcessor {
-      constructor(options) {
-        super();
-        const sr = sampleRate; // AudioWorkletGlobalScope global
-        const opts = (options && options.processorOptions) || {};
-
-        this.fftFrameSize = 1024;
-        this.oversampling = 8;
-        this.shifter = new PhaseVocoderPitchShifter(this.fftFrameSize, this.oversampling, sr);
-
-        // One ratio value per render quantum (128 samples), covering the
-        // whole render duration. Passed via processorOptions (available
-        // synchronously at construction) rather than postMessage, since
-        // OfflineAudioContext rendering can begin before a same-tick
-        // postMessage would be delivered to the processor.
-        this.ratios = opts.ratios instanceof Float32Array ? opts.ratios : new Float32Array(0);
-        this.blockIndex = 0;
-      }
-
-      process(inputs, outputs) {
-        const input = inputs[0];
-        const output = outputs[0];
-        if (!output || !output[0]) return true;
-        const outCh = output[0];
-
-        if (!input || !input[0]) {
-          outCh.fill(0);
-          return true;
-        }
-        const inCh = input[0];
-        const N = inCh.length;
-
-        const ratio = this.blockIndex < this.ratios.length ? this.ratios[this.blockIndex] : 1.0;
-        this.blockIndex++;
-
-        this.shifter.process(inCh, outCh, N, ratio);
-
-        return true;
-      }
-    }
-
-    registerProcessor('ratio-pitch-shift-processor', RatioPitchShiftProcessor);
-  }
 })(typeof globalThis !== 'undefined' ? globalThis : this);
