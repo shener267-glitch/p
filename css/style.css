@@ -189,34 +189,130 @@ audio {
 
 /* ---- Pitch editor (waveform + piano-roll) ---- */
 
-.editor-area {
+.editor-panel-head {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.editor-panel-head .panel-title {
+  margin: 0;
+}
+
+.icon-btn {
+  flex: 0 0 auto;
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  border: 1px solid var(--panel-border);
+  background: #0b0d12;
+  color: var(--text);
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.icon-btn:active {
+  filter: brightness(1.3);
+}
+
+.editor-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.zoom-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: #0b0d12;
   border: 1px solid var(--panel-border);
   border-radius: 10px;
-  overflow: hidden;
+  padding: 4px;
 }
 
-.keys-gutter {
-  flex: 0 0 auto;
+.zoom-group .icon-btn {
+  width: 32px;
+  height: 32px;
+  font-size: 1rem;
+}
+
+.zoom-label {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  padding: 0 4px;
+}
+
+.scale-group {
   display: flex;
-  flex-direction: column;
-  background: #0b0d12;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 200px;
 }
 
-.keys-spacer {
-  flex: 0 0 auto;
-}
-
-#keysCanvas {
-  display: block;
+.scale-group select {
+  padding: 8px;
+  font-size: 0.85rem;
 }
 
 .editor-scroll {
-  flex: 1 1 auto;
-  overflow-x: auto;
-  overflow-y: hidden;
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  overflow: auto;
   -webkit-overflow-scrolling: touch;
+  max-height: 50vh;
+  margin-top: 10px;
+}
+
+.editor-grid {
+  display: grid;
+  grid-template-columns: 44px auto;
+  grid-template-rows: auto auto;
+  width: max-content;
+}
+
+.corner-cell {
+  position: sticky;
+  top: 0;
+  left: 0;
+  z-index: 3;
+  grid-column: 1;
+  grid-row: 1;
+  background: #0b0d12;
+  border-right: 1px solid var(--panel-border);
+  border-bottom: 1px solid var(--panel-border);
+}
+
+.ruler-canvas {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  grid-column: 2;
+  grid-row: 1;
+  display: block;
+  border-bottom: 1px solid var(--panel-border);
+}
+
+.keys-canvas {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  grid-column: 1;
+  grid-row: 2;
+  display: block;
+  border-right: 1px solid var(--panel-border);
+}
+
+.tracks-area {
+  grid-column: 2;
+  grid-row: 2;
+  display: flex;
+  flex-direction: column;
 }
 
 #waveformCanvas,
@@ -225,7 +321,7 @@ audio {
 }
 
 #notesCanvas {
-  touch-action: pan-x;
+  touch-action: pan-x pan-y;
 }
 
 .editor-controls {
@@ -240,6 +336,33 @@ audio {
 
 .editor-controls .big-btn {
   flex: 2;
+}
+
+/* Fullscreen editing mode: a fixed full-viewport overlay rather than the
+   real Fullscreen API, since iOS Safari does not support requestFullscreen
+   on arbitrary elements. */
+.editor-panel.is-fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  margin: 0;
+  border-radius: 0;
+  max-width: none;
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  padding: 12px 12px calc(12px + env(safe-area-inset-bottom));
+  padding-top: calc(12px + env(safe-area-inset-top));
+}
+
+.editor-panel.is-fullscreen .editor-scroll {
+  flex: 1 1 auto;
+  max-height: none;
+}
+
+body.editor-fullscreen-active {
+  overflow: hidden;
 }
 
 .info-panel details {

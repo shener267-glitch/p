@@ -120,6 +120,7 @@
   const editorSection = el('editorSection');
   const originalAudio = el('originalAudio');
   const keysCanvas = el('keysCanvas');
+  const rulerCanvas = el('rulerCanvas');
   const waveformCanvas = el('waveformCanvas');
   const notesCanvas = el('notesCanvas');
   const scrollContainer = el('editorScroll');
@@ -128,6 +129,13 @@
   const renderStatusEl = el('renderStatus');
   const correctedAudio = el('correctedAudio');
   const downloadLink = el('downloadLink');
+  const fullscreenBtn = el('fullscreenBtn');
+  const zoomInHBtn = el('zoomInH');
+  const zoomOutHBtn = el('zoomOutH');
+  const zoomInVBtn = el('zoomInV');
+  const zoomOutVBtn = el('zoomOutV');
+  const scaleKeySelect = el('scaleKeySelect');
+  const scaleTypeSelect = el('scaleTypeSelect');
 
   if (!fileInput) return; // page section not present
 
@@ -145,13 +153,29 @@
     return;
   }
 
-  const PIXELS_PER_SECOND_DEFAULT = 120;
-  const MAX_CANVAS_WIDTH = 6000;
-  const MIN_PIXELS_PER_SECOND = 12;
-  const PIXELS_PER_SEMITONE = 24;
+  const BASE_PIXELS_PER_SECOND = 70;
+  const BASE_PIXELS_PER_SEMITONE = 24;
+  const H_ZOOM_MIN = 0.25;
+  const H_ZOOM_MAX = 10;
+  const V_ZOOM_MIN = 0.5;
+  const V_ZOOM_MAX = 3;
+  const ZOOM_STEP = Math.SQRT2;
   const NOTE_BLOCK_HEIGHT_RATIO = 0.72;
   const WAVEFORM_HEIGHT = 64;
   const KEYS_GUTTER_WIDTH = 44;
+  const RULER_HEIGHT = 22;
+
+  const KEY_NAMES = NOTE_NAMES;
+  const SCALES = {
+    none: { label: 'スケール: なし', intervals: null },
+    chromatic: { label: 'クロマチック', intervals: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11] },
+    major: { label: 'メジャー', intervals: [0, 2, 4, 5, 7, 9, 11] },
+    minor: { label: 'ナチュラルマイナー', intervals: [0, 2, 3, 5, 7, 8, 10] },
+    majorPenta: { label: 'メジャーペンタトニック', intervals: [0, 2, 4, 7, 9] },
+    minorPenta: { label: 'マイナーペンタトニック', intervals: [0, 3, 5, 7, 10] },
+  };
+
+  function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 
   const state = {
     sampleRate: 0,
@@ -160,9 +184,15 @@
     segments: [], // { startTime, endTime, originalMidi, targetMidi }
     midiMin: 55,
     midiMax: 79,
-    pixelsPerSecond: PIXELS_PER_SECOND_DEFAULT,
+    hZoom: 1,
+    vZoom: 1,
+    pixelsPerSecond: BASE_PIXELS_PER_SECOND,
+    pixelsPerSemitone: BASE_PIXELS_PER_SEMITONE,
     canvasWidth: 0,
     canvasHeight: 0,
+    isFullscreen: false,
+    scaleKey: 0,
+    scaleType: 'none',
     drag: null, // { segment, startPointerY, startTargetMidi }
   };
 
@@ -354,7 +384,7 @@
 
   function timeToX(t) { return t * state.pixelsPerSecond; }
   function midiToY(midi) {
-    return (state.midiMax - midi) * PIXELS_PER_SEMITONE;
+    return (state.midiMax - midi) * state.pixelsPerSemitone;
   }
 
   function layoutCanvases() {
@@ -362,13 +392,11 @@
     state.midiMin = min;
     state.midiMax = max;
 
-    const rawWidth = state.duration * PIXELS_PER_SECOND_DEFAULT;
-    state.pixelsPerSecond = rawWidth > MAX_CANVAS_WIDTH
-      ? Math.max(MIN_PIXELS_PER_SECOND, MAX_CANVAS_WIDTH / state.duration)
-      : PIXELS_PER_SECOND_DEFAULT;
+    state.pixelsPerSecond = BASE_PIXELS_PER_SECOND * state.hZoom;
+    state.pixelsPerSemitone = BASE_PIXELS_PER_SEMITONE * state.vZoom;
 
     state.canvasWidth = Math.max(1, Math.ceil(state.duration * state.pixelsPerSecond));
-    state.canvasHeight = Math.max(1, (max - min + 1) * PIXELS_PER_SEMITONE);
+    state.canvasHeight = Math.max(1, (max - min + 1) * state.pixelsPerSemitone);
 
     waveformCanvas.width = state.canvasWidth;
     waveformCanvas.height = WAVEFORM_HEIGHT;
@@ -385,18 +413,74 @@
     keysCanvas.style.width = KEYS_GUTTER_WIDTH + 'px';
     keysCanvas.style.height = state.canvasHeight + 'px';
 
-    const spacer = el('keysSpacer');
-    if (spacer) spacer.style.height = WAVEFORM_HEIGHT + 'px';
+    rulerCanvas.width = state.canvasWidth;
+    rulerCanvas.height = RULER_HEIGHT;
+    rulerCanvas.style.width = state.canvasWidth + 'px';
+    rulerCanvas.style.height = RULER_HEIGHT + 'px';
+  }
+
+  function inScalePitchClass(pc) {
+    if (state.scaleType === 'none') return false;
+    const intervals = SCALES[state.scaleType].intervals;
+    if (!intervals) return false;
+    const allowed = intervals.map((iv) => ((state.scaleKey + iv) % 12 + 12) % 12);
+    return allowed.includes(pc);
+  }
+
+  function chooseTickStep(pixelsPerSecond) {
+    const minPxBetweenTicks = 46;
+    const raw = minPxBetweenTicks / pixelsPerSecond;
+    const niceSteps = [0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900];
+    for (const s of niceSteps) if (s >= raw) return s;
+    return niceSteps[niceSteps.length - 1];
+  }
+
+  function formatTime(t) {
+    if (t < 60) {
+      const rounded = Math.round(t * 10) / 10;
+      return (Number.isInteger(rounded) ? rounded.toFixed(0) : rounded.toFixed(1)) + 's';
+    }
+    const m = Math.floor(t / 60);
+    const s = Math.round(t - m * 60);
+    return m + ':' + String(s).padStart(2, '0');
+  }
+
+  function drawRuler() {
+    const ctx = rulerCanvas.getContext('2d');
+    const w = rulerCanvas.width, h = rulerCanvas.height;
+    ctx.clearRect(0, 0, w, h);
+    ctx.fillStyle = '#0b0d12';
+    ctx.fillRect(0, 0, w, h);
+
+    const step = chooseTickStep(state.pixelsPerSecond);
+    ctx.strokeStyle = '#3a4152';
+    ctx.fillStyle = '#9aa3b2';
+    ctx.font = '10px sans-serif';
+    ctx.textBaseline = 'top';
+    for (let t = 0; t <= state.duration + step; t += step) {
+      const x = timeToX(t);
+      if (x > w + 5) break;
+      ctx.beginPath();
+      ctx.moveTo(x, h - 7);
+      ctx.lineTo(x, h);
+      ctx.stroke();
+      ctx.fillText(formatTime(t), x + 3, 2);
+    }
   }
 
   function drawKeys() {
     const ctx = keysCanvas.getContext('2d');
     ctx.clearRect(0, 0, keysCanvas.width, keysCanvas.height);
+    const rowH = state.pixelsPerSemitone;
     for (let midi = state.midiMin; midi <= state.midiMax; midi++) {
-      const y = midiToY(midi) ;
+      const y = midiToY(midi);
       const pc = ((midi % 12) + 12) % 12;
       ctx.fillStyle = BLACK_KEY_PC.has(pc) ? '#0b0d12' : '#171a21';
-      ctx.fillRect(0, y - PIXELS_PER_SEMITONE, KEYS_GUTTER_WIDTH, PIXELS_PER_SEMITONE);
+      ctx.fillRect(0, y - rowH, KEYS_GUTTER_WIDTH, rowH);
+      if (inScalePitchClass(pc)) {
+        ctx.fillStyle = 'rgba(30,197,194,0.22)';
+        ctx.fillRect(0, y - rowH, KEYS_GUTTER_WIDTH, rowH);
+      }
       if (pc === 0) {
         ctx.strokeStyle = '#3a4152';
         ctx.beginPath();
@@ -407,13 +491,14 @@
       ctx.fillStyle = '#9aa3b2';
       ctx.font = '10px sans-serif';
       ctx.textBaseline = 'middle';
-      ctx.fillText(midiToName(midi), 4, y - PIXELS_PER_SEMITONE / 2);
+      ctx.fillText(midiToName(midi), 4, y - rowH / 2);
     }
   }
 
   function drawNotes() {
     const ctx = notesCanvas.getContext('2d');
     const w = notesCanvas.width, h = notesCanvas.height;
+    const rowH = state.pixelsPerSemitone;
     ctx.clearRect(0, 0, w, h);
 
     ctx.fillStyle = '#12151c';
@@ -424,7 +509,11 @@
       const pc = ((midi % 12) + 12) % 12;
       if (BLACK_KEY_PC.has(pc)) {
         ctx.fillStyle = 'rgba(255,255,255,0.03)';
-        ctx.fillRect(0, y - PIXELS_PER_SEMITONE, w, PIXELS_PER_SEMITONE);
+        ctx.fillRect(0, y - rowH, w, rowH);
+      }
+      if (inScalePitchClass(pc)) {
+        ctx.fillStyle = 'rgba(30,197,194,0.10)';
+        ctx.fillRect(0, y - rowH, w, rowH);
       }
       ctx.strokeStyle = 'rgba(58,65,82,0.5)';
       ctx.beginPath();
@@ -451,8 +540,8 @@
       }
 
       const cy = midiToY(seg.targetMidi);
-      const blockH = PIXELS_PER_SEMITONE * NOTE_BLOCK_HEIGHT_RATIO;
-      const y1 = cy - PIXELS_PER_SEMITONE / 2 + (PIXELS_PER_SEMITONE - blockH) / 2;
+      const blockH = rowH * NOTE_BLOCK_HEIGHT_RATIO;
+      const y1 = cy - rowH / 2 + (rowH - blockH) / 2;
 
       ctx.fillStyle = edited ? '#1ec5c2' : '#5b6478';
       ctx.strokeStyle = seg === (state.drag && state.drag.segment) ? '#ffffff' : 'rgba(0,0,0,0.3)';
@@ -474,17 +563,19 @@
   function redraw() {
     drawKeys();
     drawNotes();
+    drawRuler();
   }
 
   // ---- Drag interaction (pointer events: mouse + touch + pen) ---------
   function hitTestSegment(x, y) {
+    const rowH = state.pixelsPerSemitone;
     for (let i = state.segments.length - 1; i >= 0; i--) {
       const seg = state.segments[i];
       const x1 = timeToX(seg.startTime);
       const x2 = Math.max(x1 + 2, timeToX(seg.endTime));
       const cy = midiToY(seg.targetMidi);
-      const blockH = PIXELS_PER_SEMITONE * NOTE_BLOCK_HEIGHT_RATIO;
-      const y1 = cy - PIXELS_PER_SEMITONE / 2 + (PIXELS_PER_SEMITONE - blockH) / 2;
+      const blockH = rowH * NOTE_BLOCK_HEIGHT_RATIO;
+      const y1 = cy - rowH / 2 + (rowH - blockH) / 2;
       if (x >= x1 && x <= x2 && y >= y1 && y <= y1 + blockH) return seg;
     }
     return null;
@@ -508,7 +599,7 @@
     if (!state.drag) return;
     e.preventDefault();
     const deltaYCanvas = (e.clientY - state.drag.startClientY) * state.drag.scaleY;
-    const semitoneDelta = -Math.round(deltaYCanvas / PIXELS_PER_SEMITONE);
+    const semitoneDelta = -Math.round(deltaYCanvas / state.pixelsPerSemitone);
     state.drag.segment.targetMidi = state.drag.startTargetMidi + semitoneDelta;
     redraw();
   });
@@ -528,12 +619,67 @@
     if (state.samples) window.Waveform.drawWaveform(waveformCanvas, state.samples);
   }
 
-  // ---- Reset / render ---------------------------------------------------
-  resetBtn.addEventListener('click', () => {
-    for (const seg of state.segments) seg.targetMidi = seg.originalMidi;
+  function relayout() {
+    if (!state.samples) return;
     layoutCanvases();
     redraw();
     drawWaveformIfReady();
+  }
+
+  // ---- Fullscreen / zoom / scale-highlight controls ----------------------
+  fullscreenBtn.addEventListener('click', () => {
+    state.isFullscreen = !state.isFullscreen;
+    editorSection.classList.toggle('is-fullscreen', state.isFullscreen);
+    document.body.classList.toggle('editor-fullscreen-active', state.isFullscreen);
+    fullscreenBtn.textContent = state.isFullscreen ? '×' : '⛶';
+    fullscreenBtn.setAttribute('aria-label', state.isFullscreen ? '全画面を閉じる' : '全画面表示');
+  });
+
+  zoomInHBtn.addEventListener('click', () => {
+    state.hZoom = clamp(state.hZoom * ZOOM_STEP, H_ZOOM_MIN, H_ZOOM_MAX);
+    relayout();
+  });
+  zoomOutHBtn.addEventListener('click', () => {
+    state.hZoom = clamp(state.hZoom / ZOOM_STEP, H_ZOOM_MIN, H_ZOOM_MAX);
+    relayout();
+  });
+  zoomInVBtn.addEventListener('click', () => {
+    state.vZoom = clamp(state.vZoom * ZOOM_STEP, V_ZOOM_MIN, V_ZOOM_MAX);
+    relayout();
+  });
+  zoomOutVBtn.addEventListener('click', () => {
+    state.vZoom = clamp(state.vZoom / ZOOM_STEP, V_ZOOM_MIN, V_ZOOM_MAX);
+    relayout();
+  });
+
+  KEY_NAMES.forEach((k, i) => {
+    const opt = document.createElement('option');
+    opt.value = String(i);
+    opt.textContent = k;
+    scaleKeySelect.appendChild(opt);
+  });
+  Object.keys(SCALES).forEach((id) => {
+    const opt = document.createElement('option');
+    opt.value = id;
+    opt.textContent = SCALES[id].label;
+    scaleTypeSelect.appendChild(opt);
+  });
+  scaleTypeSelect.value = 'none';
+  scaleKeySelect.disabled = true;
+
+  function onScaleChange() {
+    state.scaleKey = parseInt(scaleKeySelect.value, 10);
+    state.scaleType = scaleTypeSelect.value;
+    scaleKeySelect.disabled = state.scaleType === 'none';
+    redraw();
+  }
+  scaleKeySelect.addEventListener('change', onScaleChange);
+  scaleTypeSelect.addEventListener('change', onScaleChange);
+
+  // ---- Reset / render ---------------------------------------------------
+  resetBtn.addEventListener('click', () => {
+    for (const seg of state.segments) seg.targetMidi = seg.originalMidi;
+    relayout();
   });
 
   renderBtn.addEventListener('click', async () => {
@@ -639,6 +785,8 @@
       }).map((s) => ({ ...s, targetMidi: s.originalMidi }));
 
       state.segments = segments;
+      state.hZoom = 1;
+      state.vZoom = 1;
 
       progressBar.classList.add('hidden');
       loadStatusEl.textContent = segments.length
@@ -656,6 +804,9 @@
         getSegments: () => state.segments.map((s) => ({ ...s })),
         getMidiRange: () => ({ min: state.midiMin, max: state.midiMax }),
         getPixelsPerSecond: () => state.pixelsPerSecond,
+        getPixelsPerSemitone: () => state.pixelsPerSemitone,
+        getZoom: () => ({ h: state.hZoom, v: state.vZoom }),
+        isFullscreen: () => state.isFullscreen,
         midiToY,
         timeToX,
       };

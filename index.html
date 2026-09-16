@@ -37,17 +37,38 @@
     </section>
 
     <section id="editorSection" class="panel editor-panel hidden">
-      <h2 class="panel-title">波形 / ピッチエディタ</h2>
-      <p class="hint-text no-margin">水色のブロックが編集済みの音符です。ブロックを上下にドラッグすると半音単位でピッチが変わります。横方向はスクロールできます。</p>
+      <div class="editor-panel-head">
+        <h2 class="panel-title">波形 / ピッチエディタ</h2>
+        <button id="fullscreenBtn" class="icon-btn" type="button" title="全画面表示" aria-label="全画面表示">⛶</button>
+      </div>
+      <p class="hint-text no-margin">水色のブロックが編集済みの音符です。ブロックを上下にドラッグすると半音単位でピッチが変わります。スクロールで縦横に移動できます。</p>
 
-      <div class="editor-area">
-        <div class="keys-gutter">
-          <div id="keysSpacer" class="keys-spacer"></div>
-          <canvas id="keysCanvas"></canvas>
+      <div class="editor-toolbar">
+        <div class="zoom-group" role="group" aria-label="左右の拡大縮小">
+          <span class="zoom-label">横</span>
+          <button id="zoomOutH" class="icon-btn" type="button" aria-label="横方向に縮小">−</button>
+          <button id="zoomInH" class="icon-btn" type="button" aria-label="横方向に拡大">＋</button>
         </div>
-        <div id="editorScroll" class="editor-scroll">
-          <canvas id="waveformCanvas"></canvas>
-          <canvas id="notesCanvas"></canvas>
+        <div class="zoom-group" role="group" aria-label="上下の拡大縮小">
+          <span class="zoom-label">縦</span>
+          <button id="zoomOutV" class="icon-btn" type="button" aria-label="縦方向に縮小">−</button>
+          <button id="zoomInV" class="icon-btn" type="button" aria-label="縦方向に拡大">＋</button>
+        </div>
+        <div class="scale-group">
+          <select id="scaleKeySelect" aria-label="スケールのキー"></select>
+          <select id="scaleTypeSelect" aria-label="スケールの種類"></select>
+        </div>
+      </div>
+
+      <div id="editorScroll" class="editor-scroll">
+        <div class="editor-grid">
+          <div class="corner-cell"></div>
+          <canvas id="rulerCanvas" class="ruler-canvas"></canvas>
+          <canvas id="keysCanvas" class="keys-canvas"></canvas>
+          <div class="tracks-area">
+            <canvas id="waveformCanvas"></canvas>
+            <canvas id="notesCanvas"></canvas>
+          </div>
         </div>
       </div>
 
