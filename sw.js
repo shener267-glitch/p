@@ -1,6 +1,6 @@
 // Cache-first service worker so the tool keeps working with no network
 // connection at all once it has been opened (and installed) once.
-const CACHE_NAME = 'pitch-editor-v5';
+const CACHE_NAME = 'pitch-editor-v6';
 const APP_SHELL = [
   './',
   './index.html',
