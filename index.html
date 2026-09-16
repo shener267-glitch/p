@@ -88,6 +88,23 @@
       </div>
     </section>
 
+    <section class="panel file-panel">
+      <h2 class="panel-title">音声ファイルから補正</h2>
+      <p class="hint-text no-margin">
+        マイクの代わりに、端末内の音声ファイル（wav / mp3 / m4a など）を読み込んで補正できます。
+        上のキー・スケール・補正の強さ・スピードの設定がそのまま使われます。
+      </p>
+      <div class="control-row">
+        <label for="audioFileInput">ファイルを選択</label>
+        <input type="file" id="audioFileInput" accept="audio/*" />
+        <p id="audioFileName" class="file-name"></p>
+      </div>
+      <button id="processFileBtn" class="secondary-btn" type="button" disabled>処理して書き出す</button>
+      <p id="fileStatus" class="status-text"></p>
+      <audio id="filePreviewAudio" class="hidden" controls></audio>
+      <a id="fileDownloadLink" class="download-link hidden" download>補正済み音声をダウンロード</a>
+    </section>
+
     <section class="panel info-panel">
       <p id="installHint" class="hint-text hidden">
         📱 このページは「ホーム画面に追加」するとアプリのように起動でき、次回からオフラインでも使えます。
@@ -111,5 +128,6 @@
 </div>
 
 <script src="js/app.js"></script>
+<script src="js/file-mode.js"></script>
 </body>
 </html>

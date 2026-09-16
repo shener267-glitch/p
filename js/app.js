@@ -77,18 +77,19 @@
     return name + octave;
   }
 
+  function currentParams() {
+    return {
+      key: KEYS.indexOf(keySelect.value),
+      scaleIntervals: SCALES[scaleSelect.value].intervals,
+      correction: parseInt(correctionSlider.value, 10) / 100,
+      retuneSpeed: parseInt(speedSlider.value, 10) / 100,
+      bypass: bypassToggle.checked,
+    };
+  }
+
   function sendParams() {
     if (!workletNode) return;
-    workletNode.port.postMessage({
-      type: 'params',
-      value: {
-        key: KEYS.indexOf(keySelect.value),
-        scaleIntervals: SCALES[scaleSelect.value].intervals,
-        correction: parseInt(correctionSlider.value, 10) / 100,
-        retuneSpeed: parseInt(speedSlider.value, 10) / 100,
-        bypass: bypassToggle.checked,
-      },
-    });
+    workletNode.port.postMessage({ type: 'params', value: currentParams() });
   }
 
   function updateGain() {
@@ -122,7 +123,7 @@
 
       sourceNode = audioCtx.createMediaStreamSource(micStream);
       workletNode = new AudioWorkletNode(audioCtx, 'pitch-correction-processor', {
-        processorOptions: { quality: qualitySelect.value },
+        processorOptions: { quality: qualitySelect.value, params: currentParams() },
       });
       workletNode.port.onmessage = (e) => {
         if (e.data && e.data.type === 'pitch') onPitchReport(e.data);
@@ -298,4 +299,15 @@
   }
 
   drawMeter();
+
+  // Shared read-only access to the current key/scale/correction settings,
+  // used by js/file-mode.js so file processing matches the live controls.
+  window.PitchApp = {
+    KEYS,
+    midiToNoteName,
+    getCurrentParams: currentParams,
+    getQuality() {
+      return qualitySelect.value;
+    },
+  };
 })();
