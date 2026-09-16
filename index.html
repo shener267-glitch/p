@@ -25,7 +25,7 @@
     <section class="panel load-panel">
       <div class="control-row">
         <label for="mediaFileInput">音声ファイル または 動画ファイルを選択</label>
-        <input type="file" id="mediaFileInput" accept="audio/*,video/*,.mp3,.wav,.m4a,.aac,.flac,.ogg,.mp4,.mov,.m4v,.webm,.3gp,.avi,.mkv" />
+        <input type="file" id="mediaFileInput" />
         <p id="mediaFileName" class="file-name"></p>
       </div>
       <p id="unsupportedText" class="warning-text hidden">
@@ -90,6 +90,19 @@
     document.getElementById('installHint').classList.remove('hidden');
   }
   if ('serviceWorker' in navigator) {
+    // Reload once a newly-installed service worker takes over from a
+    // previous one, so an already-open tab picks up updated app code
+    // instead of continuing to run whatever was cached before. Skip this
+    // on a first-ever visit: claiming an until-then-uncontrolled page also
+    // fires 'controllerchange', which is not an update and reloading for
+    // it would just loop.
+    const hadController = !!navigator.serviceWorker.controller;
+    let reloadedForUpdate = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!hadController || reloadedForUpdate) return;
+      reloadedForUpdate = true;
+      window.location.reload();
+    });
     window.addEventListener('load', () => {
       navigator.serviceWorker.register('sw.js').catch(() => {});
     });
