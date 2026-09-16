@@ -255,32 +255,7 @@
     }
   }
 
-  // ---------------------------------------------------------------------
-  // Given a detected frequency, find the nearest note allowed by a musical
-  // scale (key + interval set, both in semitones).
-  // ---------------------------------------------------------------------
-  function nearestScaleFrequency(freq, keySemitone, scaleIntervals) {
-    const midi = 69 + 12 * Math.log2(freq / 440);
-    const allowed = scaleIntervals.map((iv) => (((keySemitone + iv) % 12) + 12) % 12);
-    const centerOctaveBase = Math.round(midi / 12) * 12;
-
-    let best = null;
-    let bestDist = Infinity;
-    for (let oct = centerOctaveBase - 24; oct <= centerOctaveBase + 24; oct += 12) {
-      for (let a = 0; a < allowed.length; a++) {
-        const candidate = oct + allowed[a];
-        const dist = Math.abs(candidate - midi);
-        if (dist < bestDist) {
-          bestDist = dist;
-          best = candidate;
-        }
-      }
-    }
-    const targetFreq = 440 * Math.pow(2, (best - 69) / 12);
-    return { targetMidi: best, targetFreq, sourceMidi: midi };
-  }
-
-  const DSP = { smbFft, PhaseVocoderPitchShifter, YinDetector, nearestScaleFrequency };
+  const DSP = { smbFft, PhaseVocoderPitchShifter, YinDetector };
 
   // Expose for Node-based unit testing.
   if (typeof module !== 'undefined' && module.exports) {
@@ -292,61 +267,31 @@
   // ---------------------------------------------------------------------
   // AudioWorkletProcessor wrapper. Only defined inside an AudioWorklet
   // global scope (absent in Node / normal window scope).
+  //
+  // This processor applies a precomputed per-block pitch-shift ratio
+  // timeline to the input (used to render a file with the user's manual,
+  // per-note pitch edits applied). It does not do any of its own pitch
+  // detection — analysis and note-editing happen ahead of time on the
+  // main thread, over the whole decoded buffer.
   // ---------------------------------------------------------------------
   if (typeof AudioWorkletProcessor !== 'undefined') {
-    class PitchCorrectionProcessor extends AudioWorkletProcessor {
+    class RatioPitchShiftProcessor extends AudioWorkletProcessor {
       constructor(options) {
         super();
         const sr = sampleRate; // AudioWorkletGlobalScope global
         const opts = (options && options.processorOptions) || {};
-        const light = opts.quality === 'light';
-
-        this.analysisBufferSize = light ? 800 : 1024;
-        this.detectInterval = 512;
-        this.samplesSinceDetect = 0;
-        this._win = new Float32Array(this.analysisBufferSize);
-
-        this.yin = new YinDetector(this.analysisBufferSize, sr, 0.15);
 
         this.fftFrameSize = 1024;
-        this.oversampling = light ? 4 : 8;
+        this.oversampling = 8;
         this.shifter = new PhaseVocoderPitchShifter(this.fftFrameSize, this.oversampling, sr);
 
-        this.params = {
-          key: 0,
-          scaleIntervals: [0, 2, 4, 5, 7, 9, 11],
-          correction: 1.0,
-          retuneSpeed: 0.4,
-          bypass: false,
-        };
-        // Initial params arrive here (synchronously, at construction time)
-        // rather than only via a later postMessage, because postMessage
-        // delivery is not guaranteed to complete before the first process()
-        // call — most notably with OfflineAudioContext, which can begin
-        // rendering blocks before a same-tick postMessage is handled.
-        if (opts.params) Object.assign(this.params, opts.params);
-
-        this.smoothedRatio = 1.0;
-        this.reportCounter = 0;
-        this.silenceRms = 0.008;
-
-        this.port.onmessage = (e) => {
-          if (e.data && e.data.type === 'params') {
-            Object.assign(this.params, e.data.value);
-          }
-        };
-      }
-
-      _pushRing(inputChannel) {
-        const N = inputChannel.length;
-        const size = this.analysisBufferSize;
-        const win = this._win;
-        if (N >= size) {
-          win.set(inputChannel.subarray(N - size));
-        } else {
-          win.copyWithin(0, N, size);
-          win.set(inputChannel, size - N);
-        }
+        // One ratio value per render quantum (128 samples), covering the
+        // whole render duration. Passed via processorOptions (available
+        // synchronously at construction) rather than postMessage, since
+        // OfflineAudioContext rendering can begin before a same-tick
+        // postMessage would be delivered to the processor.
+        this.ratios = opts.ratios instanceof Float32Array ? opts.ratios : new Float32Array(0);
+        this.blockIndex = 0;
       }
 
       process(inputs, outputs) {
@@ -362,64 +307,15 @@
         const inCh = input[0];
         const N = inCh.length;
 
-        this._pushRing(inCh);
-        this.samplesSinceDetect += N;
+        const ratio = this.blockIndex < this.ratios.length ? this.ratios[this.blockIndex] : 1.0;
+        this.blockIndex++;
 
-        if (this.samplesSinceDetect >= this.detectInterval) {
-          this.samplesSinceDetect = 0;
-
-          let rms = 0;
-          for (let i = 0; i < this._win.length; i++) rms += this._win[i] * this._win[i];
-          rms = Math.sqrt(rms / this._win.length);
-
-          let f0 = -1;
-          if (rms > this.silenceRms) {
-            f0 = this.yin.detect(this._win);
-          }
-
-          let targetRatio = 1.0;
-          let reportPayload = { voiced: false };
-
-          if (f0 > 0) {
-            const { targetMidi, targetFreq, sourceMidi } = nearestScaleFrequency(
-              f0,
-              this.params.key,
-              this.params.scaleIntervals
-            );
-            const idealRatio = targetFreq / f0;
-            targetRatio = 1 + this.params.correction * (idealRatio - 1);
-            targetRatio = Math.max(0.5, Math.min(2.0, targetRatio));
-            reportPayload = {
-              voiced: true,
-              f0,
-              sourceMidi,
-              targetMidi,
-              targetFreq,
-              cents: 1200 * Math.log2(targetFreq / f0),
-            };
-          }
-
-          const speed = this.params.retuneSpeed;
-          const alpha = 0.05 + speed * 0.9;
-          this.smoothedRatio += (targetRatio - this.smoothedRatio) * alpha;
-
-          this.reportCounter++;
-          if (this.reportCounter >= 4) {
-            this.reportCounter = 0;
-            this.port.postMessage(Object.assign({ type: 'pitch', ratio: this.smoothedRatio }, reportPayload));
-          }
-        }
-
-        if (this.params.bypass) {
-          outCh.set(inCh);
-        } else {
-          this.shifter.process(inCh, outCh, N, this.smoothedRatio);
-        }
+        this.shifter.process(inCh, outCh, N, ratio);
 
         return true;
       }
     }
 
-    registerProcessor('pitch-correction-processor', PitchCorrectionProcessor);
+    registerProcessor('ratio-pitch-shift-processor', RatioPitchShiftProcessor);
   }
 })(typeof globalThis !== 'undefined' ? globalThis : this);

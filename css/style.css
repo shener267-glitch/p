@@ -30,7 +30,7 @@ body {
 }
 
 .app {
-  max-width: 480px;
+  max-width: 640px;
   margin: 0 auto;
   padding: 16px 16px 32px;
   min-height: 100vh;
@@ -64,14 +64,18 @@ body {
   margin-bottom: 14px;
 }
 
-.status-panel {
-  text-align: center;
+.panel-title {
+  font-size: 1rem;
+  margin: 0 0 8px;
+}
+
+.no-margin {
+  margin-top: 0;
 }
 
 .big-btn {
-  width: 100%;
-  padding: 18px;
-  font-size: 1.1rem;
+  padding: 16px;
+  font-size: 1.05rem;
   font-weight: 700;
   border: none;
   border-radius: 14px;
@@ -85,8 +89,22 @@ body {
   filter: brightness(0.9);
 }
 
-.big-btn.running {
-  background: linear-gradient(90deg, var(--danger), #ff8a5c);
+.secondary-btn {
+  padding: 14px;
+  font-size: 1rem;
+  font-weight: 700;
+  border: 1px solid var(--accent-2);
+  border-radius: 12px;
+  background: transparent;
+  color: var(--accent-2);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.secondary-btn:disabled,
+.big-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .status-text {
@@ -112,44 +130,8 @@ body {
   display: none !important;
 }
 
-.meter-panel canvas {
-  width: 100%;
-  height: 100px;
-  display: block;
-  border-radius: 10px;
-  background: #0b0d12;
-}
-
-.note-readout {
-  display: flex;
-  gap: 12px;
-  margin-top: 12px;
-}
-
-.note-box {
-  flex: 1;
-  text-align: center;
-  background: #0b0d12;
-  border-radius: 10px;
-  padding: 10px 6px;
-}
-
-.note-label {
-  display: block;
-  font-size: 0.7rem;
-  color: var(--text-dim);
-  margin-bottom: 4px;
-}
-
-.note-value {
-  display: block;
-  font-size: 1.4rem;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-}
-
 .control-row {
-  margin-bottom: 16px;
+  margin-bottom: 12px;
 }
 
 .control-row:last-child {
@@ -163,61 +145,7 @@ body {
   margin-bottom: 6px;
 }
 
-.toggle-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.toggle-row label {
-  margin-bottom: 0;
-}
-
-select {
-  width: 100%;
-  padding: 12px;
-  border-radius: 10px;
-  border: 1px solid var(--panel-border);
-  background: #0b0d12;
-  color: var(--text);
-  font-size: 1rem;
-}
-
-.toggle-row select {
-  width: auto;
-  min-width: 55%;
-}
-
-input[type="range"] {
-  width: 100%;
-  height: 34px;
-  accent-color: var(--accent-2);
-}
-
-input[type="checkbox"] {
-  width: 22px;
-  height: 22px;
-  accent-color: var(--accent-2);
-}
-
-.range-caption {
-  display: flex;
-  justify-content: space-between;
-  font-size: 0.7rem;
-  color: var(--text-dim);
-  margin-top: -4px;
-}
-
-.panel-title {
-  font-size: 1rem;
-  margin: 0 0 8px;
-}
-
-.no-margin {
-  margin-top: 0;
-}
-
-.file-panel input[type="file"] {
+input[type="file"] {
   width: 100%;
   padding: 10px;
   border-radius: 10px;
@@ -234,27 +162,17 @@ input[type="checkbox"] {
   word-break: break-all;
 }
 
-.secondary-btn {
+progress {
   width: 100%;
-  padding: 14px;
-  font-size: 1rem;
-  font-weight: 700;
-  border: 1px solid var(--accent-2);
-  border-radius: 12px;
-  background: transparent;
-  color: var(--accent-2);
-  cursor: pointer;
-  touch-action: manipulation;
+  height: 8px;
+  margin-top: 10px;
+  accent-color: var(--accent-2);
 }
 
-.secondary-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-.file-panel audio {
+audio {
   width: 100%;
   margin-top: 12px;
+  display: block;
 }
 
 .download-link {
@@ -267,6 +185,61 @@ input[type="checkbox"] {
   color: white;
   font-weight: 700;
   text-decoration: none;
+}
+
+/* ---- Pitch editor (waveform + piano-roll) ---- */
+
+.editor-area {
+  display: flex;
+  align-items: flex-start;
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.keys-gutter {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  background: #0b0d12;
+}
+
+.keys-spacer {
+  flex: 0 0 auto;
+}
+
+#keysCanvas {
+  display: block;
+}
+
+.editor-scroll {
+  flex: 1 1 auto;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+}
+
+#waveformCanvas,
+#notesCanvas {
+  display: block;
+}
+
+#notesCanvas {
+  touch-action: pan-x;
+}
+
+.editor-controls {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.editor-controls .secondary-btn {
+  flex: 1;
+}
+
+.editor-controls .big-btn {
+  flex: 2;
 }
 
 .info-panel details {

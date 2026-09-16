@@ -1,14 +1,14 @@
 // Cache-first service worker so the tool keeps working with no network
 // connection at all once it has been opened (and installed) once.
-const CACHE_NAME = 'pitch-correction-v2';
+const CACHE_NAME = 'pitch-editor-v3';
 const APP_SHELL = [
   './',
   './index.html',
   './manifest.webmanifest',
   './css/style.css',
-  './js/app.js',
-  './js/file-mode.js',
   './js/pitch-worklet.js',
+  './js/waveform.js',
+  './js/pitch-editor.js',
   './icons/icon-192.png',
   './icons/icon-512.png',
   './icons/apple-touch-icon.png',

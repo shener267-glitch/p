@@ -2,13 +2,13 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
-<title>ピッチ補正ツール</title>
-<meta name="description" content="スマホ単体で使えるリアルタイム・ボーカルピッチ補正ツール。マイクの声をその場でスケールに合わせて補正します。サーバー通信なし、完全オフライン動作。" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>手動ピッチエディタ</title>
+<meta name="description" content="スマホ単体で使える手動ピッチ補正ツール。音声・動画ファイルの波形と音程を表示し、音符ごとにドラッグしてピッチを編集できます。サーバー通信なし、完全オフライン動作。" />
 <meta name="theme-color" content="#0f1115" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-<meta name="apple-mobile-web-app-title" content="ピッチ補正" />
+<meta name="apple-mobile-web-app-title" content="ピッチエディタ" />
 <link rel="manifest" href="manifest.webmanifest" />
 <link rel="icon" href="icons/icon-192.png" />
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
@@ -17,92 +17,47 @@
 <body>
 <div class="app">
   <header class="app-header">
-    <h1>ピッチ補正ツール</h1>
-    <p class="subtitle">スマホ単体・完全オフラインで動くリアルタイム・ボーカルピッチ補正</p>
+    <h1>手動ピッチエディタ</h1>
+    <p class="subtitle">スマホ単体・完全オフラインで動く、音符ごとに手作業でピッチを編集するツール</p>
   </header>
 
   <main>
-    <section class="panel status-panel">
-      <button id="toggleBtn" class="big-btn" type="button">マイク開始</button>
-      <p id="statusText" class="status-text">待機中</p>
+    <section class="panel load-panel">
+      <div class="control-row">
+        <label for="mediaFileInput">音声ファイル または 動画ファイルを選択</label>
+        <input type="file" id="mediaFileInput" accept="audio/*,video/*" />
+        <p id="mediaFileName" class="file-name"></p>
+      </div>
       <p id="unsupportedText" class="warning-text hidden">
-        このブラウザは必要な機能（AudioWorklet / マイク入力）に対応していません。最新の Chrome または Safari でお試しください。
+        このブラウザは必要な機能（AudioWorklet / OfflineAudioContext）に対応していません。最新の Chrome または Safari でお試しください。
       </p>
-      <p class="hint-text">
-        ⚠️ ハウリング防止のため<strong>イヤホン・ヘッドホンの使用を推奨</strong>します。
-      </p>
+      <p id="loadStatus" class="status-text"></p>
+      <progress id="analysisProgress" class="hidden" value="0" max="1"></progress>
+      <audio id="originalAudio" class="hidden" controls></audio>
     </section>
 
-    <section class="panel meter-panel">
-      <canvas id="meterCanvas" width="640" height="120"></canvas>
-      <div class="note-readout">
-        <div class="note-box">
-          <span class="note-label">検出音程</span>
-          <span id="detectedNote" class="note-value">—</span>
+    <section id="editorSection" class="panel editor-panel hidden">
+      <h2 class="panel-title">波形 / ピッチエディタ</h2>
+      <p class="hint-text no-margin">水色のブロックが編集済みの音符です。ブロックを上下にドラッグすると半音単位でピッチが変わります。横方向はスクロールできます。</p>
+
+      <div class="editor-area">
+        <div class="keys-gutter">
+          <div id="keysSpacer" class="keys-spacer"></div>
+          <canvas id="keysCanvas"></canvas>
         </div>
-        <div class="note-box">
-          <span class="note-label">補正先</span>
-          <span id="targetNote" class="note-value">—</span>
+        <div id="editorScroll" class="editor-scroll">
+          <canvas id="waveformCanvas"></canvas>
+          <canvas id="notesCanvas"></canvas>
         </div>
       </div>
-    </section>
 
-    <section class="panel controls-panel">
-      <div class="control-row">
-        <label for="keySelect">キー</label>
-        <select id="keySelect"></select>
+      <div class="editor-controls">
+        <button id="resetEditsBtn" class="secondary-btn" type="button">編集をリセット</button>
+        <button id="renderBtn" class="big-btn" type="button">書き出す</button>
       </div>
-
-      <div class="control-row">
-        <label for="scaleSelect">スケール</label>
-        <select id="scaleSelect"></select>
-      </div>
-
-      <div class="control-row slider-row">
-        <label for="correctionSlider">補正の強さ <span id="correctionValue">100%</span></label>
-        <input type="range" id="correctionSlider" min="0" max="100" value="100" />
-      </div>
-
-      <div class="control-row slider-row">
-        <label for="speedSlider">補正スピード <span id="speedValue">40%</span></label>
-        <input type="range" id="speedSlider" min="0" max="100" value="40" />
-        <div class="range-caption"><span>自然</span><span>ロボ声</span></div>
-      </div>
-
-      <div class="control-row slider-row">
-        <label for="volumeSlider">出力音量 <span id="volumeValue">80%</span></label>
-        <input type="range" id="volumeSlider" min="0" max="150" value="80" />
-      </div>
-
-      <div class="control-row toggle-row">
-        <label for="qualitySelect">処理品質</label>
-        <select id="qualitySelect">
-          <option value="high">高品質</option>
-          <option value="light">軽量（低スペック端末向け）</option>
-        </select>
-      </div>
-
-      <div class="control-row toggle-row">
-        <label for="bypassToggle">補正バイパス（原音のまま）</label>
-        <input type="checkbox" id="bypassToggle" />
-      </div>
-    </section>
-
-    <section class="panel file-panel">
-      <h2 class="panel-title">音声ファイルから補正</h2>
-      <p class="hint-text no-margin">
-        マイクの代わりに、端末内の音声ファイル（wav / mp3 / m4a など）を読み込んで補正できます。
-        上のキー・スケール・補正の強さ・スピードの設定がそのまま使われます。
-      </p>
-      <div class="control-row">
-        <label for="audioFileInput">ファイルを選択</label>
-        <input type="file" id="audioFileInput" accept="audio/*" />
-        <p id="audioFileName" class="file-name"></p>
-      </div>
-      <button id="processFileBtn" class="secondary-btn" type="button" disabled>処理して書き出す</button>
-      <p id="fileStatus" class="status-text"></p>
-      <audio id="filePreviewAudio" class="hidden" controls></audio>
-      <a id="fileDownloadLink" class="download-link hidden" download>補正済み音声をダウンロード</a>
+      <p id="renderStatus" class="status-text"></p>
+      <audio id="correctedAudio" class="hidden" controls></audio>
+      <a id="downloadLink" class="download-link hidden" download>補正済み音声をダウンロード</a>
     </section>
 
     <section class="panel info-panel">
@@ -112,10 +67,10 @@
       <details>
         <summary>使い方 / 仕組み</summary>
         <ul>
-          <li>キーとスケールを選び、「マイク開始」を押してください。</li>
-          <li>マイクの声をリアルタイムで解析し、選んだスケール上の最も近い音に補正して出力します。</li>
-          <li>「補正の強さ」を下げると自然な補正に、上げるとしっかり音程を合わせます。</li>
-          <li>「補正スピード」を上げるとケロケロした声（ロボ声・T-Pain効果）になります。</li>
+          <li>音声ファイル、または動画ファイル（音声トラックを自動抽出）を選択します。</li>
+          <li>YINアルゴリズムで音程を自動解析し、検出した音符ごとにブロックとして表示します。</li>
+          <li>ブロックを上下にドラッグすると、その音符だけ半音単位でピッチを変更できます。</li>
+          <li>「書き出す」を押すと、編集を反映した音声をプレビュー・ダウンロードできます。</li>
           <li>音声処理はすべて端末内（ブラウザ）で完結し、外部サーバーには一切送信されません。</li>
         </ul>
       </details>
@@ -123,11 +78,22 @@
   </main>
 
   <footer class="app-footer">
-    <p>すべての処理は端末内で完結します（音声はサーバーに送信されません）</p>
+    <p>すべての処理は端末内で完結します（音声・動画はサーバーに送信されません）</p>
   </footer>
 </div>
 
-<script src="js/app.js"></script>
-<script src="js/file-mode.js"></script>
+<script src="js/pitch-worklet.js"></script>
+<script src="js/waveform.js"></script>
+<script src="js/pitch-editor.js"></script>
+<script>
+  if (window.matchMedia && !window.matchMedia('(display-mode: standalone)').matches) {
+    document.getElementById('installHint').classList.remove('hidden');
+  }
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('sw.js').catch(() => {});
+    });
+  }
+</script>
 </body>
 </html>

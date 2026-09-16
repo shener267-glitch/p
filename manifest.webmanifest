@@ -1,7 +1,7 @@
 {
-  "name": "ピッチ補正ツール",
-  "short_name": "ピッチ補正",
-  "description": "スマホ単体・完全オフラインで動くリアルタイム・ボーカルピッチ補正ツール",
+  "name": "手動ピッチエディタ",
+  "short_name": "ピッチエディタ",
+  "description": "スマホ単体・完全オフラインで動く、音符ごとに手作業でピッチを編集するツール",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",
