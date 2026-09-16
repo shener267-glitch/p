@@ -138,7 +138,22 @@
       window.location.reload();
     });
     window.addEventListener('load', () => {
-      navigator.serviceWorker.register('sw.js').catch(() => {});
+      // updateViaCache: 'none' stops the browser from reusing an HTTP-cached
+      // copy of sw.js itself when checking for updates — without this, a
+      // stale cached sw.js can make the browser believe nothing changed and
+      // never even start installing the new version. Also proactively
+      // re-check whenever the tab regains focus, instead of waiting for
+      // whatever interval the browser would otherwise pick on its own.
+      navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' })
+        .then((registration) => {
+          registration.update().catch(() => {});
+          document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible') {
+              registration.update().catch(() => {});
+            }
+          });
+        })
+        .catch(() => {});
     });
   }
 </script>
