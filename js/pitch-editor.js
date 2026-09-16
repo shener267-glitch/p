@@ -242,30 +242,53 @@
 
       const blob = new Blob(chunks, { type: mimeType || 'audio/webm' });
       const arrayBuffer = await blob.arrayBuffer();
-      const DecodeCtor = window.OfflineAudioContext || window.webkitOfflineAudioContext;
-      const decodeCtx = new DecodeCtor(1, 1, 44100);
-      return await decodeCtx.decodeAudioData(arrayBuffer);
+      return await decodeViaWebAudio(arrayBuffer);
     } finally {
       URL.revokeObjectURL(url);
     }
   }
 
+  // Decodes with decodeAudioData, trying an OfflineAudioContext first (no
+  // audible side effects) and falling back to a real AudioContext, since
+  // some browsers (notably older Safari) are inconsistent about decoding
+  // via an offline context.
+  async function decodeViaWebAudio(arrayBuffer) {
+    const OfflineCtor = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+    try {
+      const offlineCtx = new OfflineCtor(1, 1, 44100);
+      return await offlineCtx.decodeAudioData(arrayBuffer.slice(0));
+    } catch (offlineErr) {
+      const AudioCtxCtor = window.AudioContext || window.webkitAudioContext;
+      const ctx = new AudioCtxCtor();
+      try {
+        return await ctx.decodeAudioData(arrayBuffer.slice(0));
+      } finally {
+        ctx.close();
+      }
+    }
+  }
+
   async function decodeAudioFromFile(file, onStatus) {
+    const arrayBuffer = await file.arrayBuffer();
+
+    // Try decoding directly first, regardless of file extension/MIME type:
+    // this covers plain audio files whose container happens to share an
+    // extension with video (e.g. .3gp / .mp4 voice recordings), which is
+    // far more common than an actual video file decoding as audio-only.
+    let decodeErr = null;
+    try {
+      return await decodeViaWebAudio(arrayBuffer);
+    } catch (err) {
+      decodeErr = err;
+    }
+
     if (looksLikeVideo(file)) {
       return extractAudioFromVideo(file, onStatus);
     }
-    const arrayBuffer = await file.arrayBuffer();
-    const DecodeCtor = window.OfflineAudioContext || window.webkitOfflineAudioContext;
-    const decodeCtx = new DecodeCtor(1, 1, 44100);
-    try {
-      return await decodeCtx.decodeAudioData(arrayBuffer);
-    } catch (err) {
-      try {
-        return await extractAudioFromVideo(file, onStatus);
-      } catch (err2) {
-        throw err;
-      }
-    }
+
+    throw new Error(
+      '音声として読み込めませんでした（' + (decodeErr && decodeErr.message ? decodeErr.message : decodeErr) + '）。対応形式: wav / mp3 / m4a など'
+    );
   }
 
   function downmixToMono(audioBuffer) {
