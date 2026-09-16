@@ -141,6 +141,11 @@
   const zoomPanel = el('zoomPanel');
   const scalePanel = el('scalePanel');
   const playToggleBtn = el('playToggleBtn');
+  const notePanel = el('notePanel');
+  const notePanelLabel = el('notePanelLabel');
+  const noteUpBtn = el('noteUpBtn');
+  const noteDownBtn = el('noteDownBtn');
+  const noteDeselectBtn = el('noteDeselectBtn');
 
   if (!fileInput) return; // page section not present
 
@@ -198,7 +203,7 @@
     isFullscreen: false,
     scaleKey: 0,
     scaleType: 'none',
-    drag: null, // { segment, startPointerY, startTargetMidi }
+    selectedSegment: null, // the note currently selected via long-press, or null
     playback: {
       audioCtx: null,
       sourceNode: null,
@@ -566,8 +571,8 @@
       const y1 = cy - rowH / 2 + (rowH - blockH) / 2;
 
       ctx.fillStyle = edited ? '#1ec5c2' : '#5b6478';
-      ctx.strokeStyle = seg === (state.drag && state.drag.segment) ? '#ffffff' : 'rgba(0,0,0,0.3)';
-      ctx.lineWidth = seg === (state.drag && state.drag.segment) ? 2 : 1;
+      ctx.strokeStyle = seg === state.selectedSegment ? '#ffffff' : 'rgba(0,0,0,0.3)';
+      ctx.lineWidth = seg === state.selectedSegment ? 2 : 1;
 
       const r = 4;
       ctx.beginPath();
@@ -598,7 +603,13 @@
     drawRuler();
   }
 
-  // ---- Drag interaction (pointer events: mouse + touch + pen) ---------
+  // ---- Note selection (long-press) + up/down pitch buttons --------------
+  // A direct vertical drag-to-retune gesture used to live here, but it
+  // fought with horizontal/vertical scroll-panning on touch (both are drag
+  // gestures starting on the same canvas), making precise dragging hard.
+  // Long-press to select a note, then adjust it with dedicated buttons,
+  // removes that ambiguity entirely: a quick or moving touch is always a
+  // scroll, and only a sustained still press selects a note.
   function hitTestSegment(x, y) {
     const rowH = state.pixelsPerSemitone;
     for (let i = state.segments.length - 1; i >= 0; i--) {
@@ -613,6 +624,54 @@
     return null;
   }
 
+  const LONG_PRESS_MS = 450;
+  const LONG_PRESS_MOVE_CANCEL_PX = 10;
+  let longPress = null; // { x, y, seg, timer }
+
+  function clearLongPress() {
+    if (longPress) {
+      clearTimeout(longPress.timer);
+      longPress = null;
+    }
+  }
+
+  function selectNote(seg) {
+    stopPlayback();
+    state.selectedSegment = seg;
+    updateNotePanelUI();
+    redraw();
+  }
+
+  function deselectNote() {
+    if (!state.selectedSegment) return;
+    state.selectedSegment = null;
+    notePanel.classList.add('hidden');
+    redraw();
+  }
+
+  function updateNotePanelUI() {
+    const seg = state.selectedSegment;
+    if (!seg) {
+      notePanel.classList.add('hidden');
+      return;
+    }
+    notePanel.classList.remove('hidden');
+    notePanelLabel.textContent = midiToName(seg.targetMidi);
+  }
+
+  function adjustSelectedNote(delta) {
+    const seg = state.selectedSegment;
+    if (!seg) return;
+    stopPlayback();
+    seg.targetMidi += delta;
+    updateNotePanelUI();
+    relayout();
+  }
+
+  noteUpBtn.addEventListener('click', () => adjustSelectedNote(1));
+  noteDownBtn.addEventListener('click', () => adjustSelectedNote(-1));
+  noteDeselectBtn.addEventListener('click', deselectNote);
+
   notesCanvas.addEventListener('pointerdown', (e) => {
     const rect = notesCanvas.getBoundingClientRect();
     const scaleX = notesCanvas.width / rect.width;
@@ -620,33 +679,34 @@
     const x = (e.clientX - rect.left) * scaleX;
     const y = (e.clientY - rect.top) * scaleY;
     const seg = hitTestSegment(x, y);
-    if (!seg) return;
-    e.preventDefault();
-    stopPlayback();
-    notesCanvas.setPointerCapture(e.pointerId);
-    state.drag = { segment: seg, startClientY: e.clientY, startTargetMidi: seg.targetMidi, scaleY };
-    redraw();
+    if (!seg) {
+      deselectNote();
+      return; // not on a note: let native scroll/pan handle this touch
+    }
+    clearLongPress();
+    longPress = {
+      x, y, seg,
+      timer: setTimeout(() => {
+        if (longPress && longPress.seg === seg) selectNote(seg);
+        longPress = null;
+      }, LONG_PRESS_MS),
+    };
   });
 
   notesCanvas.addEventListener('pointermove', (e) => {
-    if (!state.drag) return;
-    e.preventDefault();
-    const deltaYCanvas = (e.clientY - state.drag.startClientY) * state.drag.scaleY;
-    const semitoneDelta = -Math.round(deltaYCanvas / state.pixelsPerSemitone);
-    state.drag.segment.targetMidi = state.drag.startTargetMidi + semitoneDelta;
-    redraw();
+    if (!longPress) return;
+    const rect = notesCanvas.getBoundingClientRect();
+    const scaleX = notesCanvas.width / rect.width;
+    const scaleY = notesCanvas.height / rect.height;
+    const x = (e.clientX - rect.left) * scaleX;
+    const y = (e.clientY - rect.top) * scaleY;
+    if (Math.hypot(x - longPress.x, y - longPress.y) > LONG_PRESS_MOVE_CANCEL_PX) {
+      clearLongPress(); // treat as a scroll instead
+    }
   });
 
-  function endDrag(e) {
-    if (!state.drag) return;
-    try { notesCanvas.releasePointerCapture(e.pointerId); } catch (err) {}
-    state.drag = null;
-    layoutCanvases();
-    redraw();
-    drawWaveformIfReady();
-  }
-  notesCanvas.addEventListener('pointerup', endDrag);
-  notesCanvas.addEventListener('pointercancel', endDrag);
+  notesCanvas.addEventListener('pointerup', clearLongPress);
+  notesCanvas.addEventListener('pointercancel', clearLongPress);
 
   function drawWaveformIfReady() {
     if (state.samples) window.Waveform.drawWaveform(waveformCanvas, state.samples);
@@ -849,6 +909,7 @@
   // ---- Reset / render ---------------------------------------------------
   resetBtn.addEventListener('click', () => {
     stopPlayback();
+    deselectNote();
     for (const seg of state.segments) seg.targetMidi = seg.originalMidi;
     relayout();
   });
@@ -987,6 +1048,7 @@
     if (!file) return;
     stopPlayback();
     state.playback.cursorTime = 0;
+    deselectNote();
     fileNameEl.textContent = file.name;
     editorSection.classList.add('hidden');
     correctedAudio.classList.add('hidden');
@@ -1024,7 +1086,7 @@
 
       progressBar.classList.add('hidden');
       loadStatusEl.textContent = segments.length
-        ? `解析完了: ${segments.length}個の音符を検出しました。ドラッグしてピッチを編集できます。`
+        ? `解析完了: ${segments.length}個の音符を検出しました。長押しして選択し、▲▼でピッチを編集できます。`
         : '解析完了しましたが、はっきりした音程を検出できませんでした。';
 
       editorSection.classList.remove('hidden');
@@ -1043,6 +1105,7 @@
         isFullscreen: () => state.isFullscreen,
         isPlaying: () => state.playback.isPlaying,
         getCursorTime: () => state.playback.cursorTime,
+        getSelectedSegment: () => (state.selectedSegment ? { ...state.selectedSegment } : null),
         midiToY,
         timeToX,
       };
