@@ -298,6 +298,9 @@ audio {
   -webkit-overflow-scrolling: touch;
   max-height: 50vh;
   margin-top: 10px;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .editor-grid {
@@ -355,6 +358,13 @@ audio {
 
 #notesCanvas {
   touch-action: pan-x pan-y;
+  /* Without this, iOS treats a sustained touch-and-hold on any element as
+     a potential text-selection gesture and pops up its selection/callout
+     UI (magnifying loupe, Copy/Look Up menu), which fights with our own
+     long-press-to-select-a-note gesture. */
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 /* Fullscreen editing mode: a fixed full-viewport overlay rather than the
