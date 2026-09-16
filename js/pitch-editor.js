@@ -632,11 +632,14 @@
   }
 
   // ---- Fullscreen / zoom / scale-highlight controls ----------------------
+  const fullscreenIcon = fullscreenBtn.querySelector('.bt-icon');
+  const fullscreenLabel = fullscreenBtn.querySelector('.bt-label');
   fullscreenBtn.addEventListener('click', () => {
     state.isFullscreen = !state.isFullscreen;
     editorSection.classList.toggle('is-fullscreen', state.isFullscreen);
     document.body.classList.toggle('editor-fullscreen-active', state.isFullscreen);
-    fullscreenBtn.textContent = state.isFullscreen ? '×' : '⛶';
+    fullscreenIcon.textContent = state.isFullscreen ? '✕' : '⛶';
+    fullscreenLabel.textContent = state.isFullscreen ? '閉じる' : '全画面';
     fullscreenBtn.setAttribute('aria-label', state.isFullscreen ? '全画面を閉じる' : '全画面表示');
   });
 
