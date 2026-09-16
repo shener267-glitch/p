@@ -319,6 +319,12 @@
           retuneSpeed: 0.4,
           bypass: false,
         };
+        // Initial params arrive here (synchronously, at construction time)
+        // rather than only via a later postMessage, because postMessage
+        // delivery is not guaranteed to complete before the first process()
+        // call — most notably with OfflineAudioContext, which can begin
+        // rendering blocks before a same-tick postMessage is handled.
+        if (opts.params) Object.assign(this.params, opts.params);
 
         this.smoothedRatio = 1.0;
         this.reportCounter = 0;

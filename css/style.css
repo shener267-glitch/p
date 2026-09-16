@@ -208,6 +208,67 @@ input[type="checkbox"] {
   margin-top: -4px;
 }
 
+.panel-title {
+  font-size: 1rem;
+  margin: 0 0 8px;
+}
+
+.no-margin {
+  margin-top: 0;
+}
+
+.file-panel input[type="file"] {
+  width: 100%;
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px solid var(--panel-border);
+  background: #0b0d12;
+  color: var(--text);
+  font-size: 0.85rem;
+}
+
+.file-name {
+  margin: 8px 0 0;
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  word-break: break-all;
+}
+
+.secondary-btn {
+  width: 100%;
+  padding: 14px;
+  font-size: 1rem;
+  font-weight: 700;
+  border: 1px solid var(--accent-2);
+  border-radius: 12px;
+  background: transparent;
+  color: var(--accent-2);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.secondary-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.file-panel audio {
+  width: 100%;
+  margin-top: 12px;
+}
+
+.download-link {
+  display: block;
+  text-align: center;
+  margin-top: 12px;
+  padding: 14px;
+  border-radius: 12px;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  color: white;
+  font-weight: 700;
+  text-decoration: none;
+}
+
 .info-panel details {
   color: var(--text-dim);
   font-size: 0.85rem;
