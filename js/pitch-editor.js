@@ -475,7 +475,8 @@
     for (let midi = state.midiMin; midi <= state.midiMax; midi++) {
       const y = midiToY(midi);
       const pc = ((midi % 12) + 12) % 12;
-      ctx.fillStyle = BLACK_KEY_PC.has(pc) ? '#0b0d12' : '#171a21';
+      const isBlackKey = BLACK_KEY_PC.has(pc);
+      ctx.fillStyle = isBlackKey ? '#5b3f74' : '#171a21';
       ctx.fillRect(0, y - rowH, KEYS_GUTTER_WIDTH, rowH);
       if (inScalePitchClass(pc)) {
         ctx.fillStyle = 'rgba(30,197,194,0.22)';
@@ -488,7 +489,7 @@
         ctx.lineTo(KEYS_GUTTER_WIDTH, y);
         ctx.stroke();
       }
-      ctx.fillStyle = '#9aa3b2';
+      ctx.fillStyle = isBlackKey ? '#eee6f2' : '#9aa3b2';
       ctx.font = '10px sans-serif';
       ctx.textBaseline = 'middle';
       ctx.fillText(midiToName(midi), 4, y - rowH / 2);
@@ -508,7 +509,7 @@
       const y = midiToY(midi);
       const pc = ((midi % 12) + 12) % 12;
       if (BLACK_KEY_PC.has(pc)) {
-        ctx.fillStyle = 'rgba(255,255,255,0.03)';
+        ctx.fillStyle = 'rgba(91,63,116,0.35)';
         ctx.fillRect(0, y - rowH, w, rowH);
       }
       if (inScalePitchClass(pc)) {
