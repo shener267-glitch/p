@@ -2,7 +2,7 @@
 // with each meaningful change.
 (function () {
   'use strict';
-  var VERSION = '1.1.1';
+  var VERSION = '1.2.0';
 
   var badge = document.getElementById('versionBadge');
   if (badge) badge.textContent = 'v' + VERSION;

@@ -37,10 +37,6 @@
     </section>
 
     <section id="editorSection" class="panel editor-panel hidden">
-      <div class="editor-panel-head">
-        <h2 class="panel-title">波形 / ピッチエディタ</h2>
-        <button id="fullscreenBtn" class="icon-btn" type="button" title="全画面表示" aria-label="全画面表示">⛶</button>
-      </div>
       <p class="hint-text no-margin editor-hint">水色のブロックが編集済みの音符です。ブロックを上下にドラッグすると半音単位でピッチが変わります。スクロールで縦横に移動できます。</p>
 
       <div id="editorScroll" class="editor-scroll">
@@ -81,12 +77,20 @@
           <span class="bt-icon">🎹</span>
           <span class="bt-label">スケール</span>
         </button>
+        <button id="resetEditsBtn" class="bottom-tool-btn" type="button">
+          <span class="bt-icon">↺</span>
+          <span class="bt-label">リセット</span>
+        </button>
+        <button id="renderBtn" class="bottom-tool-btn" type="button">
+          <span class="bt-icon">💾</span>
+          <span class="bt-label">書き出す</span>
+        </button>
+        <button id="fullscreenBtn" class="bottom-tool-btn" type="button" aria-label="全画面表示">
+          <span class="bt-icon">⛶</span>
+          <span class="bt-label">全画面</span>
+        </button>
       </div>
 
-      <div class="editor-controls">
-        <button id="resetEditsBtn" class="secondary-btn" type="button">編集をリセット</button>
-        <button id="renderBtn" class="big-btn" type="button">書き出す</button>
-      </div>
       <p id="renderStatus" class="status-text"></p>
       <audio id="correctedAudio" class="hidden" controls></audio>
       <a id="downloadLink" class="download-link hidden" download>補正済み音声をダウンロード</a>
