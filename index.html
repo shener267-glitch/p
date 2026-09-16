@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+<title>ピッチ補正ツール</title>
+<meta name="description" content="スマホ単体で使えるリアルタイム・ボーカルピッチ補正ツール。マイクの声をその場でスケールに合わせて補正します。サーバー通信なし、完全オフライン動作。" />
+<meta name="theme-color" content="#0f1115" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="ピッチ補正" />
+<link rel="manifest" href="manifest.webmanifest" />
+<link rel="icon" href="icons/icon-192.png" />
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+<link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+<div class="app">
+  <header class="app-header">
+    <h1>ピッチ補正ツール</h1>
+    <p class="subtitle">スマホ単体・完全オフラインで動くリアルタイム・ボーカルピッチ補正</p>
+  </header>
+
+  <main>
+    <section class="panel status-panel">
+      <button id="toggleBtn" class="big-btn" type="button">マイク開始</button>
+      <p id="statusText" class="status-text">待機中</p>
+      <p id="unsupportedText" class="warning-text hidden">
+        このブラウザは必要な機能（AudioWorklet / マイク入力）に対応していません。最新の Chrome または Safari でお試しください。
+      </p>
+      <p class="hint-text">
+        ⚠️ ハウリング防止のため<strong>イヤホン・ヘッドホンの使用を推奨</strong>します。
+      </p>
+    </section>
+
+    <section class="panel meter-panel">
+      <canvas id="meterCanvas" width="640" height="120"></canvas>
+      <div class="note-readout">
+        <div class="note-box">
+          <span class="note-label">検出音程</span>
+          <span id="detectedNote" class="note-value">—</span>
+        </div>
+        <div class="note-box">
+          <span class="note-label">補正先</span>
+          <span id="targetNote" class="note-value">—</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel controls-panel">
+      <div class="control-row">
+        <label for="keySelect">キー</label>
+        <select id="keySelect"></select>
+      </div>
+
+      <div class="control-row">
+        <label for="scaleSelect">スケール</label>
+        <select id="scaleSelect"></select>
+      </div>
+
+      <div class="control-row slider-row">
+        <label for="correctionSlider">補正の強さ <span id="correctionValue">100%</span></label>
+        <input type="range" id="correctionSlider" min="0" max="100" value="100" />
+      </div>
+
+      <div class="control-row slider-row">
+        <label for="speedSlider">補正スピード <span id="speedValue">40%</span></label>
+        <input type="range" id="speedSlider" min="0" max="100" value="40" />
+        <div class="range-caption"><span>自然</span><span>ロボ声</span></div>
+      </div>
+
+      <div class="control-row slider-row">
+        <label for="volumeSlider">出力音量 <span id="volumeValue">80%</span></label>
+        <input type="range" id="volumeSlider" min="0" max="150" value="80" />
+      </div>
+
+      <div class="control-row toggle-row">
+        <label for="qualitySelect">処理品質</label>
+        <select id="qualitySelect">
+          <option value="high">高品質</option>
+          <option value="light">軽量（低スペック端末向け）</option>
+        </select>
+      </div>
+
+      <div class="control-row toggle-row">
+        <label for="bypassToggle">補正バイパス（原音のまま）</label>
+        <input type="checkbox" id="bypassToggle" />
+      </div>
+    </section>
+
+    <section class="panel info-panel">
+      <p id="installHint" class="hint-text hidden">
+        📱 このページは「ホーム画面に追加」するとアプリのように起動でき、次回からオフラインでも使えます。
+      </p>
+      <details>
+        <summary>使い方 / 仕組み</summary>
+        <ul>
+          <li>キーとスケールを選び、「マイク開始」を押してください。</li>
+          <li>マイクの声をリアルタイムで解析し、選んだスケール上の最も近い音に補正して出力します。</li>
+          <li>「補正の強さ」を下げると自然な補正に、上げるとしっかり音程を合わせます。</li>
+          <li>「補正スピード」を上げるとケロケロした声（ロボ声・T-Pain効果）になります。</li>
+          <li>音声処理はすべて端末内（ブラウザ）で完結し、外部サーバーには一切送信されません。</li>
+        </ul>
+      </details>
+    </section>
+  </main>
+
+  <footer class="app-footer">
+    <p>すべての処理は端末内で完結します（音声はサーバーに送信されません）</p>
+  </footer>
+</div>
+
+<script src="js/app.js"></script>
+</body>
+</html>
