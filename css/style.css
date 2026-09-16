@@ -327,6 +327,8 @@ audio {
   grid-row: 1;
   display: block;
   border-bottom: 1px solid var(--panel-border);
+  cursor: pointer;
+  touch-action: pan-x;
 }
 
 .keys-canvas {
