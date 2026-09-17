@@ -210,8 +210,13 @@ audio {
 
 .bottom-toolbar {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
   margin-top: 10px;
+}
+
+.bottom-toolbar .bottom-tool-btn {
+  flex-basis: calc(25% - 5px);
 }
 
 .bottom-tool-btn {
@@ -361,10 +366,19 @@ audio {
   /* Without this, iOS treats a sustained touch-and-hold on any element as
      a potential text-selection gesture and pops up its selection/callout
      UI (magnifying loupe, Copy/Look Up menu), which fights with our own
-     long-press-to-select-a-note gesture. */
+     long-press-to-reselect-a-range gesture. */
   -webkit-touch-callout: none;
   -webkit-user-select: none;
   user-select: none;
+}
+
+/* While "範囲選択" (range-select) mode is on, a drag on the canvas defines
+   a new edit range instead of scrolling the view, so panning must be
+   disabled here or the browser will race the gesture against our own
+   pointer handlers. */
+#notesCanvas.selection-mode {
+  touch-action: none;
+  cursor: crosshair;
 }
 
 /* Fullscreen editing mode: a fixed full-viewport overlay rather than the
