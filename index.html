@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>手動ピッチエディタ</title>
-<meta name="description" content="スマホ単体で使える手動ピッチ補正ツール。音声・動画ファイルの波形と音程を表示し、音符ごとにドラッグしてピッチを編集できます。サーバー通信なし、完全オフライン動作。" />
+<meta name="description" content="スマホ単体で使える手動ピッチ補正ツール。音声・動画ファイルの波形と音程を連続した曲線で表示し、自由に選んだ範囲ごとにピッチを編集できます。サーバー通信なし、完全オフライン動作。" />
 <meta name="theme-color" content="#0f1115" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -18,7 +18,7 @@
 <div class="app">
   <header class="app-header">
     <h1>手動ピッチエディタ <span id="versionBadge" class="version-badge"></span></h1>
-    <p class="subtitle">スマホ単体・完全オフラインで動く、音符ごとに手作業でピッチを編集するツール</p>
+    <p class="subtitle">スマホ単体・完全オフラインで動く、自由に選んだ範囲を手作業でピッチ編集するツール</p>
   </header>
 
   <main>
@@ -37,7 +37,7 @@
     </section>
 
     <section id="editorSection" class="panel editor-panel hidden">
-      <p class="hint-text no-margin editor-hint">水色のブロックが編集済みの音符です。ブロックを長押しすると選択され、▲▼ボタンで半音単位でピッチを変更できます。上の時間軸をタップするとその位置から再生できます。</p>
+      <p class="hint-text no-margin editor-hint">グレーの線が実際の音程です。「範囲選択」をONにしてドラッグすると編集したい範囲を選べます。選択済みの範囲は長押しで選び直し、▲▼で半音単位のピッチを調整できます。上の時間軸をタップするとその位置から再生できます。</p>
 
       <div id="editorScroll" class="editor-scroll">
         <div class="editor-grid">
@@ -67,8 +67,8 @@
         <select id="scaleKeySelect" aria-label="スケールのキー"></select>
         <select id="scaleTypeSelect" aria-label="スケールの種類"></select>
       </div>
-      <div id="notePanel" class="tool-panel hidden" role="group" aria-label="選択中の音符の音程調整">
-        <span id="notePanelLabel" class="zoom-label">音符: —</span>
+      <div id="notePanel" class="tool-panel hidden" role="group" aria-label="選択中の範囲の音程調整">
+        <span id="notePanelLabel" class="zoom-label">範囲: —</span>
         <div class="zoom-group">
           <button id="noteDownBtn" class="icon-btn" type="button" aria-label="半音下げる">▼</button>
           <button id="noteUpBtn" class="icon-btn" type="button" aria-label="半音上げる">▲</button>
@@ -77,6 +77,10 @@
       </div>
 
       <div class="bottom-toolbar" role="toolbar" aria-label="編集ツール">
+        <button id="rangeToolBtn" class="bottom-tool-btn" type="button" aria-pressed="false">
+          <span class="bt-icon">▭</span>
+          <span class="bt-label">範囲選択</span>
+        </button>
         <button id="zoomToolBtn" class="bottom-tool-btn" type="button" aria-expanded="false" aria-controls="zoomPanel">
           <span class="bt-icon">🔍</span>
           <span class="bt-label">拡大縮小</span>
@@ -116,8 +120,9 @@
         <summary>使い方 / 仕組み</summary>
         <ul>
           <li>音声ファイル、または動画ファイル（音声トラックを自動抽出）を選択します。</li>
-          <li>YINアルゴリズムで音程を自動解析し、検出した音符ごとにブロックとして表示します。</li>
-          <li>ブロックを長押しして選択し、▲▼ボタンで半音単位でピッチを変更できます。編集していない部分の音質は変化しません。</li>
+          <li>YINアルゴリズムで音程を自動解析し、グレーの線（実際の音程の動き）として表示します。不安定な歌い方でも途切れず連続した線で見られます。</li>
+          <li>「範囲選択」をONにしてピアノロール上をドラッグすると、好きな範囲を自由に選べます。選択済みの範囲は長押しで選び直せます。</li>
+          <li>▲▼ボタンで選択した範囲のピッチを半音単位で変更できます。編集していない部分の音質は変化しません。</li>
           <li>「再生」ボタン、または上部の時間軸をタップすると、編集を反映した音をその場でプレビューできます。</li>
           <li>「書き出す」を押すと、編集を反映した音声をダウンロードできます。</li>
           <li>音声処理はすべて端末内（ブラウザ）で完結し、外部サーバーには一切送信されません。</li>

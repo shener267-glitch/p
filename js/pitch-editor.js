@@ -14,47 +14,6 @@
     return 440 * Math.pow(2, (midi - 69) / 12);
   }
 
-  // contour: array of { time, f0 } where f0 is Hz or null (unvoiced).
-  // Splits into runs of consecutive frames that round to the same semitone,
-  // separated by unvoiced gaps or a change of semitone. Short/noisy runs are
-  // dropped. Returns [{ startTime, endTime, originalMidi }], targetMidi is
-  // NOT set here (callers initialize it, typically to originalMidi).
-  function segmentPitchContour(contour, opts) {
-    const options = opts || {};
-    const minDuration = options.minDuration != null ? options.minDuration : 0.06;
-    const frameDuration = options.frameDuration || 0;
-
-    const raw = [];
-    let cur = null;
-
-    for (let i = 0; i < contour.length; i++) {
-      const point = contour[i];
-      if (point.f0 == null || point.f0 <= 0) {
-        if (cur) { raw.push(cur); cur = null; }
-        continue;
-      }
-      const midi = freqToMidi(point.f0);
-      const rounded = Math.round(midi);
-      if (!cur) {
-        cur = { startTime: point.time, endTime: point.time, rounded, midiValues: [midi] };
-      } else if (rounded === cur.rounded) {
-        cur.endTime = point.time;
-        cur.midiValues.push(midi);
-      } else {
-        raw.push(cur);
-        cur = { startTime: point.time, endTime: point.time, rounded, midiValues: [midi] };
-      }
-    }
-    if (cur) raw.push(cur);
-
-    return raw
-      .filter((s) => s.endTime - s.startTime + frameDuration >= minDuration)
-      .map((s) => {
-        const avg = s.midiValues.reduce((a, b) => a + b, 0) / s.midiValues.length;
-        return { startTime: s.startTime, endTime: s.endTime + frameDuration, originalMidi: avg };
-      });
-  }
-
   // Builds a Float32Array of one pitch-shift ratio per render block (default
   // 1.0 = no shift everywhere), applying each edited segment's ratio across
   // its time span with a short linear (in semitone space) ramp at its edges
@@ -91,7 +50,7 @@
     return ratios;
   }
 
-  const CoreAPI = { freqToMidi, midiToFreq, segmentPitchContour, buildRatioTimeline };
+  const CoreAPI = { freqToMidi, midiToFreq, buildRatioTimeline };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = CoreAPI;
   if (global) global.PitchEditorCore = CoreAPI;
@@ -141,11 +100,12 @@
   const zoomPanel = el('zoomPanel');
   const scalePanel = el('scalePanel');
   const playToggleBtn = el('playToggleBtn');
-  const notePanel = el('notePanel');
-  const notePanelLabel = el('notePanelLabel');
-  const noteUpBtn = el('noteUpBtn');
-  const noteDownBtn = el('noteDownBtn');
-  const noteDeselectBtn = el('noteDeselectBtn');
+  const rangePanel = el('notePanel');
+  const rangePanelLabel = el('notePanelLabel');
+  const rangeUpBtn = el('noteUpBtn');
+  const rangeDownBtn = el('noteDownBtn');
+  const rangeDeselectBtn = el('noteDeselectBtn');
+  const rangeToolBtn = el('rangeToolBtn');
 
   if (!fileInput) return; // page section not present
 
@@ -170,7 +130,6 @@
   const V_ZOOM_MIN = 0.5;
   const V_ZOOM_MAX = 3;
   const ZOOM_STEP = Math.SQRT2;
-  const NOTE_BLOCK_HEIGHT_RATIO = 0.72;
   const WAVEFORM_HEIGHT = 64;
   const KEYS_GUTTER_WIDTH = 44;
   const RULER_HEIGHT = 22;
@@ -191,7 +150,13 @@
     sampleRate: 0,
     samples: null, // Float32Array mono
     duration: 0,
-    segments: [], // { startTime, endTime, originalMidi, targetMidi }
+    contourPoints: [], // { time, midi } — the actual detected pitch, for display only
+    contourHop: 0, // seconds between contour points, used to detect gaps (silence)
+    editRanges: [], // { id, startTime, endTime, shiftSemitones } — user-defined edits
+    nextRangeId: 1,
+    selectedRange: null,
+    selectionMode: false, // "範囲選択" tool: drag on the canvas defines a new range
+    pendingSelection: null, // { startTime, endTime } while dragging out a new range
     midiMin: 55,
     midiMax: 79,
     hZoom: 1,
@@ -203,7 +168,6 @@
     isFullscreen: false,
     scaleKey: 0,
     scaleType: 'none',
-    selectedSegment: null, // the note currently selected via long-press, or null
     playback: {
       audioCtx: null,
       sourceNode: null,
@@ -396,16 +360,16 @@
   }
 
   // ---- Layout / rendering ---------------------------------------------
-  function computeMidiRange(segments) {
-    if (!segments.length) return { min: 55, max: 79 };
+  function computeMidiRange() {
+    if (!state.contourPoints.length) return { min: 55, max: 79 };
     let min = Infinity, max = -Infinity;
-    for (const s of segments) {
-      const lo = Math.min(s.originalMidi, s.targetMidi);
-      const hi = Math.max(s.originalMidi, s.targetMidi);
-      if (lo < min) min = lo;
-      if (hi > max) max = hi;
+    for (const p of state.contourPoints) {
+      if (p.midi < min) min = p.midi;
+      if (p.midi > max) max = p.midi;
     }
-    return { min: Math.floor(min) - 3, max: Math.ceil(max) + 3 };
+    let maxAbsShift = 0;
+    for (const r of state.editRanges) maxAbsShift = Math.max(maxAbsShift, Math.abs(r.shiftSemitones));
+    return { min: Math.floor(min - maxAbsShift) - 2, max: Math.ceil(max + maxAbsShift) + 2 };
   }
 
   function timeToX(t) { return t * state.pixelsPerSecond; }
@@ -414,7 +378,7 @@
   }
 
   function layoutCanvases() {
-    const { min, max } = computeMidiRange(state.segments);
+    const { min, max } = computeMidiRange();
     state.midiMin = min;
     state.midiMax = max;
 
@@ -549,41 +513,51 @@
       ctx.stroke();
     }
 
-    for (const seg of state.segments) {
-      const x1 = timeToX(seg.startTime);
-      const x2 = Math.max(x1 + 2, timeToX(seg.endTime));
-      const edited = seg.targetMidi !== seg.originalMidi;
+    // Edited-range bands, drawn before the pitch curve so the curve overlays
+    // them cleanly.
+    for (const r of state.editRanges) {
+      const x1 = timeToX(r.startTime);
+      const x2 = Math.max(x1 + 2, timeToX(r.endTime));
+      const isSelected = r === state.selectedRange;
+      const isActive = r.shiftSemitones !== 0;
 
-      // Faint marker at the original detected pitch, for reference.
-      if (edited) {
-        const oy = midiToY(seg.originalMidi);
-        ctx.strokeStyle = 'rgba(154,163,178,0.5)';
-        ctx.setLineDash([2, 2]);
-        ctx.beginPath();
-        ctx.moveTo(x1, oy);
-        ctx.lineTo(x2, oy);
-        ctx.stroke();
-        ctx.setLineDash([]);
+      ctx.fillStyle = isActive ? 'rgba(30,197,194,0.14)' : 'rgba(255,255,255,0.05)';
+      ctx.fillRect(x1, 0, x2 - x1, h);
+      ctx.strokeStyle = isSelected ? '#ffffff' : 'rgba(30,197,194,0.4)';
+      ctx.lineWidth = isSelected ? 2 : 1;
+      ctx.strokeRect(x1, 0, x2 - x1, h);
+
+      if (isActive) {
+        const sign = r.shiftSemitones > 0 ? '+' : '';
+        ctx.fillStyle = '#eafffe';
+        ctx.font = 'bold 11px sans-serif';
+        ctx.textBaseline = 'top';
+        ctx.fillText(`${sign}${r.shiftSemitones}`, x1 + 4, 4);
       }
+    }
 
-      const cy = midiToY(seg.targetMidi);
-      const blockH = rowH * NOTE_BLOCK_HEIGHT_RATIO;
-      const y1 = cy - rowH / 2 + (rowH - blockH) / 2;
+    // The range currently being dragged out (selection mode only).
+    if (state.pendingSelection) {
+      const x1 = timeToX(Math.min(state.pendingSelection.startTime, state.pendingSelection.endTime));
+      const x2 = timeToX(Math.max(state.pendingSelection.startTime, state.pendingSelection.endTime));
+      ctx.fillStyle = 'rgba(255,255,255,0.10)';
+      ctx.fillRect(x1, 0, x2 - x1, h);
+      ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+      ctx.setLineDash([4, 3]);
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(x1, 0, x2 - x1, h);
+      ctx.setLineDash([]);
+    }
 
-      ctx.fillStyle = edited ? '#1ec5c2' : '#5b6478';
-      ctx.strokeStyle = seg === state.selectedSegment ? '#ffffff' : 'rgba(0,0,0,0.3)';
-      ctx.lineWidth = seg === state.selectedSegment ? 2 : 1;
+    // The actual detected performance, as a continuous curve — this is the
+    // real, possibly-wavering pitch, not snapped to any note.
+    drawPitchCurve(ctx, state.contourPoints, 0, '#8a93a8', 1.5);
 
-      const r = 4;
-      ctx.beginPath();
-      ctx.moveTo(x1 + r, y1);
-      ctx.arcTo(x2, y1, x2, y1 + blockH, r);
-      ctx.arcTo(x2, y1 + blockH, x1, y1 + blockH, r);
-      ctx.arcTo(x1, y1 + blockH, x1, y1, r);
-      ctx.arcTo(x1, y1, x2, y1, r);
-      ctx.closePath();
-      ctx.fill();
-      ctx.stroke();
+    // For each edited range, a preview curve of what the shift produces.
+    for (const r of state.editRanges) {
+      if (r.shiftSemitones === 0) continue;
+      const clipped = state.contourPoints.filter((p) => p.time >= r.startTime && p.time <= r.endTime);
+      drawPitchCurve(ctx, clipped, r.shiftSemitones, '#1ec5c2', 2);
     }
 
     if (state.playback.isPlaying || state.playback.cursorTime > 0) {
@@ -597,36 +571,62 @@
     }
   }
 
+  // Draws points as a line, breaking into separate strokes wherever the time
+  // gap between consecutive points is large enough to mean "silence" rather
+  // than just the normal spacing between analysis frames.
+  function drawPitchCurve(ctx, points, semitoneOffset, color, lineWidth) {
+    if (!points.length) return;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = lineWidth;
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    const gapThreshold = Math.max(state.contourHop * 3, 0.001);
+    let drawing = false;
+    let prevTime = null;
+    for (const p of points) {
+      const x = timeToX(p.time);
+      const y = midiToY(p.midi + semitoneOffset);
+      const gap = prevTime != null && p.time - prevTime > gapThreshold;
+      if (!drawing || gap) {
+        if (drawing) ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        drawing = true;
+      } else {
+        ctx.lineTo(x, y);
+      }
+      prevTime = p.time;
+    }
+    if (drawing) ctx.stroke();
+  }
+
   function redraw() {
     drawKeys();
     drawNotes();
     drawRuler();
   }
 
-  // ---- Note selection (long-press) + up/down pitch buttons --------------
-  // A direct vertical drag-to-retune gesture used to live here, but it
-  // fought with horizontal/vertical scroll-panning on touch (both are drag
-  // gestures starting on the same canvas), making precise dragging hard.
-  // Long-press to select a note, then adjust it with dedicated buttons,
-  // removes that ambiguity entirely: a quick or moving touch is always a
-  // scroll, and only a sustained still press selects a note.
-  function hitTestSegment(x, y) {
-    const rowH = state.pixelsPerSemitone;
-    for (let i = state.segments.length - 1; i >= 0; i--) {
-      const seg = state.segments[i];
-      const x1 = timeToX(seg.startTime);
-      const x2 = Math.max(x1 + 2, timeToX(seg.endTime));
-      const cy = midiToY(seg.targetMidi);
-      const blockH = rowH * NOTE_BLOCK_HEIGHT_RATIO;
-      const y1 = cy - rowH / 2 + (rowH - blockH) / 2;
-      if (x >= x1 && x <= x2 && y >= y1 && y <= y1 + blockH) return seg;
+  // ---- Manual range selection + up/down pitch buttons --------------------
+  // Auto-detecting discrete "notes" from the pitch contour turned out to
+  // fragment badly for unstable/wavering singing (lots of tiny broken-up
+  // blocks). Editing is now fully manual: a "範囲選択" tool mode turns
+  // dragging on the canvas into defining an arbitrary time range (instead of
+  // scrolling), and the resulting range gets its own pitch shift, adjustable
+  // with ▼/▲ buttons — independent of any auto-detected note boundaries.
+  // Outside selection mode, a long-press on an existing range selects it for
+  // adjustment (same reasoning as before: a quick or moving touch is always
+  // a scroll, only a sustained still press engages our own gesture).
+  function hitTestRange(t) {
+    for (let i = state.editRanges.length - 1; i >= 0; i--) {
+      const r = state.editRanges[i];
+      if (t >= r.startTime && t <= r.endTime) return r;
     }
     return null;
   }
 
   const LONG_PRESS_MS = 450;
   const LONG_PRESS_MOVE_CANCEL_PX = 10;
-  let longPress = null; // { x, y, seg, timer }
+  let longPress = null; // { x, y, range, timer }
 
   function clearLongPress() {
     if (longPress) {
@@ -635,42 +635,72 @@
     }
   }
 
-  function selectNote(seg) {
+  function selectRange(range) {
     stopPlayback();
-    state.selectedSegment = seg;
-    updateNotePanelUI();
+    state.selectedRange = range;
+    updateRangePanelUI();
     redraw();
   }
 
-  function deselectNote() {
-    if (!state.selectedSegment) return;
-    state.selectedSegment = null;
-    notePanel.classList.add('hidden');
+  function deselectRange() {
+    if (!state.selectedRange) return;
+    state.selectedRange = null;
+    rangePanel.classList.add('hidden');
     redraw();
   }
 
-  function updateNotePanelUI() {
-    const seg = state.selectedSegment;
-    if (!seg) {
-      notePanel.classList.add('hidden');
+  function updateRangePanelUI() {
+    const r = state.selectedRange;
+    if (!r) {
+      rangePanel.classList.add('hidden');
       return;
     }
-    notePanel.classList.remove('hidden');
-    notePanelLabel.textContent = midiToName(seg.targetMidi);
+    rangePanel.classList.remove('hidden');
+    const sign = r.shiftSemitones > 0 ? '+' : '';
+    rangePanelLabel.textContent = `${sign}${r.shiftSemitones}半音`;
   }
 
-  function adjustSelectedNote(delta) {
-    const seg = state.selectedSegment;
-    if (!seg) return;
+  function adjustSelectedRange(delta) {
+    const r = state.selectedRange;
+    if (!r) return;
     stopPlayback();
-    seg.targetMidi += delta;
-    updateNotePanelUI();
+    r.shiftSemitones += delta;
+    updateRangePanelUI();
     relayout();
   }
 
-  noteUpBtn.addEventListener('click', () => adjustSelectedNote(1));
-  noteDownBtn.addEventListener('click', () => adjustSelectedNote(-1));
-  noteDeselectBtn.addEventListener('click', deselectNote);
+  rangeUpBtn.addEventListener('click', () => adjustSelectedRange(1));
+  rangeDownBtn.addEventListener('click', () => adjustSelectedRange(-1));
+  rangeDeselectBtn.addEventListener('click', deselectRange);
+
+  function setSelectionMode(on) {
+    state.selectionMode = on;
+    rangeToolBtn.classList.toggle('active', on);
+    rangeToolBtn.setAttribute('aria-pressed', String(on));
+    notesCanvas.classList.toggle('selection-mode', on);
+    if (!on) {
+      state.pendingSelection = null;
+      redraw();
+    }
+  }
+  rangeToolBtn.addEventListener('click', () => setSelectionMode(!state.selectionMode));
+
+  function finalizePendingSelection(pointerId) {
+    try { notesCanvas.releasePointerCapture(pointerId); } catch (err) {}
+    const pending = state.pendingSelection;
+    state.pendingSelection = null;
+    if (!pending) return;
+    const lo = Math.max(0, Math.min(pending.startTime, pending.endTime));
+    const hi = Math.min(state.duration, Math.max(pending.startTime, pending.endTime));
+    if (hi - lo < 0.05) {
+      redraw(); // too short to be an intentional selection; ignore
+      return;
+    }
+    const range = { id: state.nextRangeId++, startTime: lo, endTime: hi, shiftSemitones: 0 };
+    state.editRanges.push(range);
+    selectRange(range);
+    relayout();
+  }
 
   notesCanvas.addEventListener('pointerdown', (e) => {
     const rect = notesCanvas.getBoundingClientRect();
@@ -678,35 +708,65 @@
     const scaleY = notesCanvas.height / rect.height;
     const x = (e.clientX - rect.left) * scaleX;
     const y = (e.clientY - rect.top) * scaleY;
-    const seg = hitTestSegment(x, y);
-    if (!seg) {
-      deselectNote();
-      return; // not on a note: let native scroll/pan handle this touch
+    const t = x / state.pixelsPerSecond;
+
+    if (state.selectionMode) {
+      e.preventDefault();
+      stopPlayback();
+      notesCanvas.setPointerCapture(e.pointerId);
+      state.pendingSelection = { startTime: t, endTime: t };
+      redraw();
+      return;
+    }
+
+    const range = hitTestRange(t);
+    if (!range) {
+      deselectRange();
+      return; // not on a range: let native scroll/pan handle this touch
     }
     clearLongPress();
     longPress = {
-      x, y, seg,
+      x, y, range,
       timer: setTimeout(() => {
-        if (longPress && longPress.seg === seg) selectNote(seg);
+        if (longPress && longPress.range === range) selectRange(range);
         longPress = null;
       }, LONG_PRESS_MS),
     };
   });
 
   notesCanvas.addEventListener('pointermove', (e) => {
-    if (!longPress) return;
     const rect = notesCanvas.getBoundingClientRect();
     const scaleX = notesCanvas.width / rect.width;
     const scaleY = notesCanvas.height / rect.height;
     const x = (e.clientX - rect.left) * scaleX;
     const y = (e.clientY - rect.top) * scaleY;
+
+    if (state.selectionMode && state.pendingSelection) {
+      state.pendingSelection.endTime = x / state.pixelsPerSecond;
+      redraw();
+      return;
+    }
+
+    if (!longPress) return;
     if (Math.hypot(x - longPress.x, y - longPress.y) > LONG_PRESS_MOVE_CANCEL_PX) {
       clearLongPress(); // treat as a scroll instead
     }
   });
 
-  notesCanvas.addEventListener('pointerup', clearLongPress);
-  notesCanvas.addEventListener('pointercancel', clearLongPress);
+  notesCanvas.addEventListener('pointerup', (e) => {
+    if (state.pendingSelection) {
+      finalizePendingSelection(e.pointerId);
+      return;
+    }
+    clearLongPress();
+  });
+  notesCanvas.addEventListener('pointercancel', (e) => {
+    if (state.pendingSelection) {
+      state.pendingSelection = null;
+      redraw();
+    }
+    clearLongPress();
+  });
 
   function drawWaveformIfReady() {
     if (state.samples) window.Waveform.drawWaveform(waveformCanvas, state.samples);
@@ -772,7 +832,7 @@
 
     let previewSamples;
     try {
-      previewSamples = await renderCorrectedAudio(state.samples, state.sampleRate, state.segments);
+      previewSamples = await renderCorrectedAudio(state.samples, state.sampleRate, editRangesAsSegments());
     } catch (err) {
       playToggleBtn.disabled = false;
       updatePlayButtonUI();
@@ -909,8 +969,8 @@
   // ---- Reset / render ---------------------------------------------------
   resetBtn.addEventListener('click', () => {
     stopPlayback();
-    deselectNote();
-    for (const seg of state.segments) seg.targetMidi = seg.originalMidi;
+    deselectRange();
+    state.editRanges = [];
     relayout();
   });
 
@@ -919,7 +979,7 @@
     correctedAudio.classList.add('hidden');
     downloadLink.classList.add('hidden');
     try {
-      const rendered = await renderCorrectedAudio(state.samples, state.sampleRate, state.segments, (p) => {
+      const rendered = await renderCorrectedAudio(state.samples, state.sampleRate, editRangesAsSegments(), (p) => {
         renderStatusEl.textContent = `書き出し中… ${Math.round(p * 100)}%`;
       });
       const blob = encodeMonoWav(rendered, state.sampleRate);
@@ -937,9 +997,22 @@
     }
   });
 
+  // renderCorrectedAudio/buildRatioTimeline both operate on a generic
+  // { startTime, endTime, originalMidi, targetMidi } "segment" shape. A
+  // manual range's shift is relative (not tied to any specific detected
+  // pitch), so it's expressed the same way with originalMidi fixed at 0 and
+  // targetMidi set to the shift amount — targetMidi - originalMidi then
+  // works out to exactly the intended semitone shift, with no other change
+  // needed to the (already quality-verified) rendering pipeline below.
+  function editRangesAsSegments() {
+    return state.editRanges
+      .filter((r) => r.shiftSemitones !== 0)
+      .map((r) => ({ startTime: r.startTime, endTime: r.endTime, originalMidi: 0, targetMidi: r.shiftSemitones }));
+  }
+
   // Renders the edited audio. Untouched stretches are copied through
   // byte-for-byte from the original samples; only the time ranges actually
-  // covering an edited note (plus a short margin) are run through the
+  // covering an edited range (plus a short margin) are run through the
   // phase-vocoder pitch shifter. This avoids the previous behavior of
   // running the *entire* file through the shifter even when nothing was
   // edited — the phase vocoder's windowed reconstruction is not perfectly
@@ -1048,7 +1121,8 @@
     if (!file) return;
     stopPlayback();
     state.playback.cursorTime = 0;
-    deselectNote();
+    deselectRange();
+    setSelectionMode(false);
     fileNameEl.textContent = file.name;
     editorSection.classList.add('hidden');
     correctedAudio.classList.add('hidden');
@@ -1075,18 +1149,19 @@
         progressBar.value = p;
       });
 
-      const segments = window.PitchEditorCore.segmentPitchContour(contour, {
-        minDuration: 0.06,
-        frameDuration: hop / decoded.sampleRate,
-      }).map((s) => ({ ...s, targetMidi: s.originalMidi }));
-
-      state.segments = segments;
+      state.contourPoints = contour
+        .filter((p) => p.f0 != null && p.f0 > 0)
+        .map((p) => ({ time: p.time, midi: freqToMidi(p.f0) }));
+      state.contourHop = hop / decoded.sampleRate;
+      state.editRanges = [];
+      state.nextRangeId = 1;
+      state.selectedRange = null;
       state.hZoom = 1;
       state.vZoom = 1;
 
       progressBar.classList.add('hidden');
-      loadStatusEl.textContent = segments.length
-        ? `解析完了: ${segments.length}個の音符を検出しました。長押しして選択し、▲▼でピッチを編集できます。`
+      loadStatusEl.textContent = state.contourPoints.length
+        ? '解析完了。「範囲選択」ツールで音程を変えたい範囲をドラッグして選び、▲▼でピッチを調整できます。'
         : '解析完了しましたが、はっきりした音程を検出できませんでした。';
 
       editorSection.classList.remove('hidden');
@@ -1097,7 +1172,8 @@
       // Minimal read-only debug surface, used by automated tests to locate
       // note blocks on the canvas without hardcoding layout assumptions.
       window.PitchEditorDebug = {
-        getSegments: () => state.segments.map((s) => ({ ...s })),
+        getEditRanges: () => state.editRanges.map((r) => ({ ...r })),
+        getContourPoints: () => state.contourPoints.map((p) => ({ ...p })),
         getMidiRange: () => ({ min: state.midiMin, max: state.midiMax }),
         getPixelsPerSecond: () => state.pixelsPerSecond,
         getPixelsPerSemitone: () => state.pixelsPerSemitone,
@@ -1105,7 +1181,8 @@
         isFullscreen: () => state.isFullscreen,
         isPlaying: () => state.playback.isPlaying,
         getCursorTime: () => state.playback.cursorTime,
-        getSelectedSegment: () => (state.selectedSegment ? { ...state.selectedSegment } : null),
+        getSelectedRange: () => (state.selectedRange ? { ...state.selectedRange } : null),
+        isSelectionMode: () => state.selectionMode,
         midiToY,
         timeToX,
       };
