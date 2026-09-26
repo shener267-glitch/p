@@ -296,6 +296,45 @@ audio {
   font-size: 0.85rem;
 }
 
+#midiPanel {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.midi-file-row {
+  margin-bottom: 0;
+}
+
+.midi-file-row label {
+  font-size: 0.8rem;
+}
+
+.midi-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.midi-controls select {
+  padding: 8px;
+  font-size: 0.8rem;
+  border-radius: 8px;
+  border: 1px solid var(--panel-border);
+  background: #0b0d12;
+  color: var(--text);
+  max-width: 100%;
+}
+
+.midi-enabled-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8rem;
+  color: var(--text-dim);
+}
+
 .editor-scroll {
   border: 1px solid var(--panel-border);
   border-radius: 10px;

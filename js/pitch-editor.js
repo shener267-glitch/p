@@ -50,7 +50,57 @@
     return ratios;
   }
 
-  const CoreAPI = { freqToMidi, midiToFreq, buildRatioTimeline };
+  // Builds a per-block ratio timeline for MIDI-guided auto-correction, given
+  // parallel per-block arrays of the actually-detected pitch and the target
+  // (guide melody) pitch — either may be `null` for a block with no singing
+  // pitch detected or no active guide note at that time, in which case the
+  // ratio there is 1.0 (untouched). Shifts are clamped to maxShiftSemitones:
+  // a much larger gap almost always means a pitch-detection error (e.g. an
+  // octave mistake) rather than a real correction the user wants applied.
+  // Ratios ramp in/out (in semitone space) around every valid stretch's
+  // edges, the same way buildRatioTimeline ramps around a single segment's
+  // edges, so the shift doesn't click in/out abruptly at silence or note
+  // boundaries.
+  function buildGuideRatioTimeline(perBlockActualMidi, perBlockTargetMidi, opts) {
+    const options = opts || {};
+    const sampleRate = options.sampleRate;
+    const blockSize = options.blockSize || 128;
+    const rampSeconds = options.rampSeconds != null ? options.rampSeconds : 0.06;
+    const maxShiftSemitones = options.maxShiftSemitones != null ? options.maxShiftSemitones : 12;
+
+    const n = perBlockActualMidi.length;
+    const ratios = new Float32Array(n).fill(1.0);
+    const valid = new Uint8Array(n);
+    for (let i = 0; i < n; i++) {
+      valid[i] = perBlockActualMidi[i] != null && perBlockTargetMidi[i] != null ? 1 : 0;
+    }
+
+    const rampBlocks = Math.max(1, Math.round((rampSeconds * sampleRate) / blockSize));
+    const distToInvalidBefore = new Float64Array(n);
+    let lastInvalid = -Infinity;
+    for (let i = 0; i < n; i++) {
+      if (!valid[i]) lastInvalid = i;
+      distToInvalidBefore[i] = i - lastInvalid;
+    }
+    const distToInvalidAfter = new Float64Array(n);
+    let nextInvalid = Infinity;
+    for (let i = n - 1; i >= 0; i--) {
+      if (!valid[i]) nextInvalid = i;
+      distToInvalidAfter[i] = nextInvalid - i;
+    }
+
+    for (let i = 0; i < n; i++) {
+      if (!valid[i]) continue;
+      const dist = Math.min(distToInvalidBefore[i], distToInvalidAfter[i]);
+      const mix = Math.min(1, dist / rampBlocks);
+      let shift = perBlockTargetMidi[i] - perBlockActualMidi[i];
+      shift = Math.max(-maxShiftSemitones, Math.min(maxShiftSemitones, shift));
+      ratios[i] = Math.pow(2, (shift * mix) / 12);
+    }
+    return ratios;
+  }
+
+  const CoreAPI = { freqToMidi, midiToFreq, buildRatioTimeline, buildGuideRatioTimeline };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = CoreAPI;
   if (global) global.PitchEditorCore = CoreAPI;
@@ -106,6 +156,17 @@
   const rangeDownBtn = el('noteDownBtn');
   const rangeDeselectBtn = el('noteDeselectBtn');
   const rangeToolBtn = el('rangeToolBtn');
+  const midiToolBtn = el('midiToolBtn');
+  const midiPanel = el('midiPanel');
+  const midiFileInput = el('midiFileInput');
+  const midiStatusEl = el('midiStatus');
+  const midiControls = el('midiControls');
+  const midiTrackSelect = el('midiTrackSelect');
+  const midiOffsetDownBtn = el('midiOffsetDownBtn');
+  const midiOffsetUpBtn = el('midiOffsetUpBtn');
+  const midiOffsetLabel = el('midiOffsetLabel');
+  const midiEnabledCheckbox = el('midiEnabledCheckbox');
+  const midiClearBtn = el('midiClearBtn');
 
   if (!fileInput) return; // page section not present
 
@@ -168,6 +229,13 @@
     isFullscreen: false,
     scaleKey: 0,
     scaleType: 'none',
+    midiGuide: {
+      tracks: [], // parsed tracks from a loaded MIDI file (js/midi-parser.js)
+      selectedTrackIndex: -1,
+      offsetSeconds: 0, // shifts the guide melody's timeline to fix sync drift
+      enabled: true,
+      cache: null, // { key, buffer } — memoized guide-corrected base audio
+    },
     playback: {
       audioCtx: null,
       sourceNode: null,
@@ -367,6 +435,10 @@
       if (p.midi < min) min = p.midi;
       if (p.midi > max) max = p.midi;
     }
+    for (const n of getGuideNotes()) {
+      if (n.midi < min) min = n.midi;
+      if (n.midi > max) max = n.midi;
+    }
     let maxAbsShift = 0;
     for (const r of state.editRanges) maxAbsShift = Math.max(maxAbsShift, Math.abs(r.shiftSemitones));
     return { min: Math.floor(min - maxAbsShift) - 2, max: Math.ceil(max + maxAbsShift) + 2 };
@@ -407,6 +479,21 @@
     rulerCanvas.height = RULER_HEIGHT;
     rulerCanvas.style.width = state.canvasWidth + 'px';
     rulerCanvas.style.height = RULER_HEIGHT + 'px';
+  }
+
+  // ---- MIDI-guided auto-correction ---------------------------------------
+  // Returns the currently-selected guide track's notes, shifted by the
+  // user-adjustable sync offset. Empty when no MIDI file is loaded/selected.
+  function getGuideNotes() {
+    const g = state.midiGuide;
+    if (!g.tracks.length || g.selectedTrackIndex < 0) return [];
+    const track = g.tracks.find((t) => t.index === g.selectedTrackIndex);
+    if (!track) return [];
+    return track.notes.map((n) => ({
+      startTime: n.startTime + g.offsetSeconds,
+      endTime: n.endTime + g.offsetSeconds,
+      midi: n.midi,
+    }));
   }
 
   function inScalePitchClass(pc) {
@@ -513,6 +600,12 @@
       ctx.stroke();
     }
 
+    // The MIDI guide melody (if loaded), drawn as a backdrop of translucent
+    // note blocks — dimmed while correction is temporarily disabled via the
+    // checkbox, so the user can tell at a glance whether it's actually in
+    // effect right now.
+    drawGuideNotes(ctx);
+
     // Edited-range bands, drawn before the pitch curve so the curve overlays
     // them cleanly.
     for (const r of state.editRanges) {
@@ -568,6 +661,25 @@
       ctx.moveTo(px, 0);
       ctx.lineTo(px, h);
       ctx.stroke();
+    }
+  }
+
+  function drawGuideNotes(ctx) {
+    const notes = getGuideNotes();
+    if (!notes.length) return;
+    const h = notesCanvas.height;
+    const rowH = state.pixelsPerSemitone;
+    const enabled = state.midiGuide.enabled;
+    ctx.fillStyle = enabled ? 'rgba(230,126,34,0.28)' : 'rgba(230,126,34,0.12)';
+    ctx.strokeStyle = enabled ? 'rgba(230,126,34,0.7)' : 'rgba(230,126,34,0.3)';
+    ctx.lineWidth = 1;
+    for (const n of notes) {
+      if (n.endTime <= 0 || n.startTime >= state.duration) continue;
+      const x1 = timeToX(Math.max(0, n.startTime));
+      const x2 = Math.max(x1 + 2, timeToX(Math.min(state.duration, n.endTime)));
+      const y = midiToY(n.midi);
+      ctx.fillRect(x1, y - rowH, x2 - x1, rowH);
+      ctx.strokeRect(x1, y - rowH, x2 - x1, rowH);
     }
   }
 
@@ -832,7 +944,9 @@
 
     let previewSamples;
     try {
-      previewSamples = await renderCorrectedAudio(state.samples, state.sampleRate, editRangesAsSegments());
+      const base = await getGuideCorrectedBase();
+      if (myToken !== pb.renderToken) return; // superseded while the guide pass was running
+      previewSamples = await renderCorrectedAudio(base, state.sampleRate, editRangesAsSegments());
     } catch (err) {
       playToggleBtn.disabled = false;
       updatePlayButtonUI();
@@ -910,7 +1024,7 @@
   function setupToolToggle(button, panel) {
     button.addEventListener('click', () => {
       const isOpen = !panel.classList.contains('hidden');
-      [[zoomToolBtn, zoomPanel], [scaleToolBtn, scalePanel]].forEach(([b, p]) => {
+      [[zoomToolBtn, zoomPanel], [scaleToolBtn, scalePanel], [midiToolBtn, midiPanel]].forEach(([b, p]) => {
         p.classList.add('hidden');
         b.classList.remove('active');
         b.setAttribute('aria-expanded', 'false');
@@ -924,6 +1038,7 @@
   }
   setupToolToggle(zoomToolBtn, zoomPanel);
   setupToolToggle(scaleToolBtn, scalePanel);
+  setupToolToggle(midiToolBtn, midiPanel);
 
   zoomInHBtn.addEventListener('click', () => {
     state.hZoom = clamp(state.hZoom * ZOOM_STEP, H_ZOOM_MIN, H_ZOOM_MAX);
@@ -966,6 +1081,103 @@
   scaleKeySelect.addEventListener('change', onScaleChange);
   scaleTypeSelect.addEventListener('change', onScaleChange);
 
+  // ---- MIDI guide melody (load / track select / sync offset) ------------
+  const MIDI_OFFSET_STEP = 0.05;
+
+  function updateMidiOffsetLabel() {
+    const s = state.midiGuide.offsetSeconds;
+    midiOffsetLabel.textContent = (s >= 0 ? '+' : '') + s.toFixed(2) + 's';
+  }
+
+  function populateMidiTrackSelect() {
+    midiTrackSelect.innerHTML = '';
+    for (const t of state.midiGuide.tracks) {
+      const opt = document.createElement('option');
+      opt.value = String(t.index);
+      opt.textContent = `トラック${t.index + 1}（${t.noteCount}音${t.isDrumChannel ? '・ドラム' : ''}）`;
+      midiTrackSelect.appendChild(opt);
+    }
+    midiTrackSelect.value = String(state.midiGuide.selectedTrackIndex);
+  }
+
+  if (midiFileInput) {
+    midiFileInput.addEventListener('change', async () => {
+      const file = midiFileInput.files && midiFileInput.files[0];
+      if (!file) return;
+      midiStatusEl.textContent = '読み込み中…';
+      try {
+        if (!window.MidiParser) throw new Error('MIDIパーサーの読み込みに失敗しました。ページを再読み込みしてください。');
+        const buf = await file.arrayBuffer();
+        const parsed = window.MidiParser.parseMidiFile(buf);
+        if (!parsed.tracks.length) throw new Error('音符が見つかりませんでした');
+
+        stopPlayback();
+        state.midiGuide.tracks = parsed.tracks;
+        state.midiGuide.selectedTrackIndex = parsed.suggestedTrackIndex;
+        state.midiGuide.offsetSeconds = 0;
+        state.midiGuide.enabled = true;
+        state.midiGuide.cache = null;
+
+        populateMidiTrackSelect();
+        midiControls.classList.remove('hidden');
+        midiEnabledCheckbox.checked = true;
+        updateMidiOffsetLabel();
+        const selected = parsed.tracks.find((t) => t.index === parsed.suggestedTrackIndex);
+        midiStatusEl.textContent = `読み込み完了（全${parsed.tracks.length}トラック中、${selected.noteCount}音のトラックを自動選択）`;
+        relayout();
+      } catch (err) {
+        midiStatusEl.textContent = 'MIDIの読み込みに失敗しました: ' + (err && err.message ? err.message : err);
+      }
+    });
+  }
+
+  if (midiTrackSelect) {
+    midiTrackSelect.addEventListener('change', () => {
+      stopPlayback();
+      state.midiGuide.selectedTrackIndex = parseInt(midiTrackSelect.value, 10);
+      state.midiGuide.cache = null;
+      relayout();
+    });
+  }
+
+  if (midiOffsetDownBtn) {
+    midiOffsetDownBtn.addEventListener('click', () => adjustMidiOffset(-MIDI_OFFSET_STEP));
+  }
+  if (midiOffsetUpBtn) {
+    midiOffsetUpBtn.addEventListener('click', () => adjustMidiOffset(MIDI_OFFSET_STEP));
+  }
+  function adjustMidiOffset(delta) {
+    if (!state.midiGuide.tracks.length) return;
+    stopPlayback();
+    state.midiGuide.offsetSeconds = Math.round((state.midiGuide.offsetSeconds + delta) * 100) / 100;
+    state.midiGuide.cache = null;
+    updateMidiOffsetLabel();
+    redraw();
+  }
+
+  if (midiEnabledCheckbox) {
+    midiEnabledCheckbox.addEventListener('change', () => {
+      stopPlayback();
+      state.midiGuide.enabled = midiEnabledCheckbox.checked;
+      redraw();
+    });
+  }
+
+  if (midiClearBtn) {
+    midiClearBtn.addEventListener('click', () => {
+      stopPlayback();
+      state.midiGuide.tracks = [];
+      state.midiGuide.selectedTrackIndex = -1;
+      state.midiGuide.offsetSeconds = 0;
+      state.midiGuide.enabled = true;
+      state.midiGuide.cache = null;
+      midiControls.classList.add('hidden');
+      midiStatusEl.textContent = '';
+      if (midiFileInput) midiFileInput.value = '';
+      relayout();
+    });
+  }
+
   // ---- Reset / render ---------------------------------------------------
   resetBtn.addEventListener('click', () => {
     stopPlayback();
@@ -979,7 +1191,10 @@
     correctedAudio.classList.add('hidden');
     downloadLink.classList.add('hidden');
     try {
-      const rendered = await renderCorrectedAudio(state.samples, state.sampleRate, editRangesAsSegments(), (p) => {
+      const base = await getGuideCorrectedBase((p) => {
+        renderStatusEl.textContent = `MIDIガイドに合わせて補正中… ${Math.round(p * 100)}%`;
+      });
+      const rendered = await renderCorrectedAudio(base, state.sampleRate, editRangesAsSegments(), (p) => {
         renderStatusEl.textContent = `書き出し中… ${Math.round(p * 100)}%`;
       });
       const blob = encodeMonoWav(rendered, state.sampleRate);
@@ -1115,6 +1330,150 @@
     return output;
   }
 
+  // Renders a version of `samples` that follows the MIDI guide melody: at
+  // every point where both an actual sung pitch and an active guide note
+  // exist, the audio is shifted by (target - actual) semitones so it lands
+  // on the guide's pitch, exactly like the manual-range renderer but with a
+  // continuously-varying, per-block shift instead of one constant shift per
+  // range. Deliberately parallel in structure to renderCorrectedAudio rather
+  // than sharing its loop, so changes here can't affect that already
+  // quality-verified path.
+  async function renderGuideCorrectedAudio(samples, sampleRate, contourPoints, contourHopSeconds, guideNotes, onProgress) {
+    const totalSamples = samples.length;
+    const output = samples.slice();
+    if (!guideNotes.length || !contourPoints.length) {
+      if (onProgress) onProgress(1);
+      return output;
+    }
+
+    const blockSize = 128;
+    const marginSeconds = 0.05;
+    const marginSamples = Math.round(marginSeconds * sampleRate);
+    const tailPad = 4096;
+
+    const rawRanges = guideNotes
+      .map((n) => ({
+        start: Math.max(0, Math.floor(n.startTime * sampleRate) - marginSamples),
+        end: Math.min(totalSamples, Math.ceil(n.endTime * sampleRate) + marginSamples),
+      }))
+      .filter((r) => r.end > r.start)
+      .sort((a, b) => a.start - b.start);
+
+    const runs = [];
+    for (const r of rawRanges) {
+      const last = runs[runs.length - 1];
+      if (last && r.start <= last.end) {
+        last.end = Math.max(last.end, r.end);
+      } else {
+        runs.push({ start: r.start, end: r.end });
+      }
+    }
+    if (!runs.length) {
+      if (onProgress) onProgress(1);
+      return output;
+    }
+
+    // Monotonic cursors: valid because both runs and the blocks within each
+    // run are processed in strictly increasing time order below.
+    const sortedNotes = guideNotes.slice().sort((a, b) => a.startTime - b.startTime);
+    let noteCursor = 0;
+    function targetMidiAt(t) {
+      while (noteCursor < sortedNotes.length && sortedNotes[noteCursor].endTime <= t) noteCursor++;
+      const n = sortedNotes[noteCursor];
+      if (n && n.startTime <= t && t < n.endTime) return n.midi;
+      return null;
+    }
+    let contourCursor = 0;
+    const contourGapTolerance = Math.max(contourHopSeconds * 2, 0.005);
+    function actualMidiAt(t) {
+      while (contourCursor < contourPoints.length - 1 && contourPoints[contourCursor + 1].time <= t) contourCursor++;
+      const a = contourPoints[contourCursor];
+      const b = contourPoints[contourCursor + 1];
+      let best = a;
+      if (b && Math.abs(b.time - t) < Math.abs((a ? a.time : Infinity) - t)) best = b;
+      if (!best || Math.abs(best.time - t) > contourGapTolerance) return null;
+      return best.midi;
+    }
+
+    for (let runIdx = 0; runIdx < runs.length; runIdx++) {
+      const run = runs[runIdx];
+      const runLength = run.end - run.start;
+      const renderLength = runLength + tailPad;
+      const numBlocks = Math.max(1, Math.ceil(renderLength / blockSize));
+
+      const actualArr = new Array(numBlocks);
+      const targetArr = new Array(numBlocks);
+      for (let b = 0; b < numBlocks; b++) {
+        const t = (run.start + b * blockSize) / sampleRate;
+        actualArr[b] = actualMidiAt(t);
+        targetArr[b] = targetMidiAt(t);
+      }
+      const ratios = window.PitchEditorCore.buildGuideRatioTimeline(actualArr, targetArr, {
+        sampleRate,
+        blockSize,
+        rampSeconds: 0.06,
+        maxShiftSemitones: 12,
+      });
+
+      const shifter = new window.PitchCorrectionDSP.PhaseVocoderPitchShifter(1024, 8, sampleRate);
+      const runOutput = new Float32Array(renderLength);
+      const inBlock = new Float32Array(blockSize);
+      const outBlock = new Float32Array(blockSize);
+      let sinceYield = 0;
+
+      for (let i = 0; i < renderLength; i += blockSize) {
+        const srcStart = run.start + i;
+        const n = Math.min(blockSize, totalSamples - srcStart, renderLength - i);
+        inBlock.fill(0);
+        if (n > 0) inBlock.set(samples.subarray(srcStart, srcStart + n));
+
+        const ratio = ratios[Math.floor(i / blockSize)] || 1.0;
+        shifter.process(inBlock, outBlock, blockSize, ratio);
+        const outN = Math.min(blockSize, renderLength - i);
+        runOutput.set(outBlock.subarray(0, outN), i);
+
+        sinceYield++;
+        if (sinceYield >= 200) {
+          sinceYield = 0;
+          if (onProgress) onProgress((runIdx + i / renderLength) / runs.length);
+          await new Promise((resolve) => requestAnimationFrame(resolve));
+        }
+      }
+
+      const latency = shifter.inFifoLatency;
+      const fadeLen = Math.min(marginSamples, Math.floor(runLength / 2));
+      for (let i = 0; i < runLength; i++) {
+        let mix = 1.0;
+        if (i < fadeLen) mix = i / fadeLen;
+        else if (i >= runLength - fadeLen) mix = (runLength - 1 - i) / fadeLen;
+        const shiftedSample = runOutput[i + latency] || 0;
+        const outIdx = run.start + i;
+        output[outIdx] = output[outIdx] * (1 - mix) + shiftedSample * mix;
+      }
+    }
+
+    if (onProgress) onProgress(1);
+    return output;
+  }
+
+  // Returns the audio that manual range edits should be layered on top of:
+  // the original samples, or (when a MIDI guide is loaded and enabled) a
+  // cached guide-corrected version of them. Memoized by track+offset so
+  // repeated playback/export while nothing guide-related has changed doesn't
+  // re-run the (potentially whole-file) correction pass every time.
+  async function getGuideCorrectedBase(onProgress) {
+    const g = state.midiGuide;
+    if (!g.enabled || !g.tracks.length || g.selectedTrackIndex < 0) return state.samples;
+    const key = g.selectedTrackIndex + ':' + g.offsetSeconds.toFixed(2);
+    if (g.cache && g.cache.key === key) return g.cache.buffer;
+    const notes = getGuideNotes();
+    const corrected = await renderGuideCorrectedAudio(
+      state.samples, state.sampleRate, state.contourPoints, state.contourHop, notes, onProgress
+    );
+    g.cache = { key, buffer: corrected };
+    return corrected;
+  }
+
   // ---- File input wiring -------------------------------------------------
   fileInput.addEventListener('change', async () => {
     const file = fileInput.files && fileInput.files[0];
@@ -1158,6 +1517,7 @@
       state.selectedRange = null;
       state.hZoom = 1;
       state.vZoom = 1;
+      state.midiGuide.cache = null; // stale: was computed from the previous file's samples
 
       progressBar.classList.add('hidden');
       loadStatusEl.textContent = state.contourPoints.length
@@ -1183,6 +1543,11 @@
         getCursorTime: () => state.playback.cursorTime,
         getSelectedRange: () => (state.selectedRange ? { ...state.selectedRange } : null),
         isSelectionMode: () => state.selectionMode,
+        getMidiGuideTracks: () => state.midiGuide.tracks.map((t) => ({ ...t, notes: t.notes.map((n) => ({ ...n })) })),
+        getSelectedMidiTrackIndex: () => state.midiGuide.selectedTrackIndex,
+        getMidiGuideNotes: () => getGuideNotes(),
+        getMidiGuideOffset: () => state.midiGuide.offsetSeconds,
+        isMidiGuideEnabled: () => state.midiGuide.enabled,
         midiToY,
         timeToX,
       };

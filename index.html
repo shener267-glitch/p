@@ -37,7 +37,7 @@
     </section>
 
     <section id="editorSection" class="panel editor-panel hidden">
-      <p class="hint-text no-margin editor-hint">グレーの線が実際の音程です。「範囲選択」をONにしてドラッグすると編集したい範囲を選べます。選択済みの範囲は長押しで選び直し、▲▼で半音単位のピッチを調整できます。上の時間軸をタップするとその位置から再生できます。</p>
+      <p class="hint-text no-margin editor-hint">グレーの線が実際の音程です。「範囲選択」をONにしてドラッグすると編集したい範囲を選べます。選択済みの範囲は長押しで選び直し、▲▼で半音単位のピッチを調整できます。上の時間軸をタップするとその位置から再生できます。「MIDIガイド」でお手本のメロディを読み込むと、そのメロディに合わせて自動でピッチを補正できます。</p>
 
       <div id="editorScroll" class="editor-scroll">
         <div class="editor-grid">
@@ -75,11 +75,37 @@
         </div>
         <button id="noteDeselectBtn" class="icon-btn" type="button" aria-label="選択解除">✕</button>
       </div>
+      <div id="midiPanel" class="tool-panel hidden" role="group" aria-label="MIDIガイド補正">
+        <div class="control-row midi-file-row">
+          <label for="midiFileInput">MIDIファイル（お手本のメロディ）を選択</label>
+          <input type="file" id="midiFileInput" />
+        </div>
+        <p id="midiStatus" class="status-text no-margin"></p>
+        <div id="midiControls" class="midi-controls hidden">
+          <label for="midiTrackSelect" class="zoom-label">トラック</label>
+          <select id="midiTrackSelect" aria-label="ガイドに使うトラック"></select>
+          <div class="zoom-group" role="group" aria-label="タイミングのずれを調整">
+            <span class="zoom-label">ズレ補正</span>
+            <button id="midiOffsetDownBtn" class="icon-btn" type="button" aria-label="ガイドを早める">−</button>
+            <span id="midiOffsetLabel" class="zoom-label">0.00s</span>
+            <button id="midiOffsetUpBtn" class="icon-btn" type="button" aria-label="ガイドを遅らせる">＋</button>
+          </div>
+          <label class="midi-enabled-label">
+            <input type="checkbox" id="midiEnabledCheckbox" checked />
+            補正を有効にする
+          </label>
+          <button id="midiClearBtn" class="icon-btn" type="button" aria-label="MIDIガイドを外す">✕</button>
+        </div>
+      </div>
 
       <div class="bottom-toolbar" role="toolbar" aria-label="編集ツール">
         <button id="rangeToolBtn" class="bottom-tool-btn" type="button" aria-pressed="false">
           <span class="bt-icon">▭</span>
           <span class="bt-label">範囲選択</span>
+        </button>
+        <button id="midiToolBtn" class="bottom-tool-btn" type="button" aria-expanded="false" aria-controls="midiPanel">
+          <span class="bt-icon">🎼</span>
+          <span class="bt-label">MIDIガイド</span>
         </button>
         <button id="zoomToolBtn" class="bottom-tool-btn" type="button" aria-expanded="false" aria-controls="zoomPanel">
           <span class="bt-icon">🔍</span>
@@ -123,6 +149,7 @@
           <li>YINアルゴリズムで音程を自動解析し、グレーの線（実際の音程の動き）として表示します。不安定な歌い方でも途切れず連続した線で見られます。</li>
           <li>「範囲選択」をONにしてピアノロール上をドラッグすると、好きな範囲を自由に選べます。選択済みの範囲は長押しで選び直せます。</li>
           <li>▲▼ボタンで選択した範囲のピッチを半音単位で変更できます。編集していない部分の音質は変化しません。</li>
+          <li>「MIDIガイド」からお手本のメロディが入ったMIDIファイルを選ぶと、そのメロディの音程に合わせて自動でピッチ補正できます（読み込んだ音声・動画と時間の長さが合っている必要があります）。読み込んだトラックが違う場合はプルダウンで切り替え、タイミングがずれる場合は「ズレ補正」で調整してください。</li>
           <li>「再生」ボタン、または上部の時間軸をタップすると、編集を反映した音をその場でプレビューできます。</li>
           <li>「書き出す」を押すと、編集を反映した音声をダウンロードできます。</li>
           <li>音声処理はすべて端末内（ブラウザ）で完結し、外部サーバーには一切送信されません。</li>
@@ -139,6 +166,7 @@
 
 <script src="js/pitch-worklet.js"></script>
 <script src="js/waveform.js"></script>
+<script src="js/midi-parser.js"></script>
 <script src="js/pitch-editor.js"></script>
 <script src="js/version.js"></script>
 <script>
